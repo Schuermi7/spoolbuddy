@@ -163,7 +163,8 @@ async def set_filament(serial: str, ams_id: int, tray_id: int, filament: AmsFila
 async def assign_spool_to_tray(serial: str, ams_id: int, tray_id: int, request: AssignSpoolRequest):
     """Assign a spool from inventory to an AMS slot.
 
-    Looks up the spool data and sends filament settings to the printer.
+    Looks up the spool data, sends filament settings to the printer,
+    and persists the assignment for usage tracking.
 
     Args:
         serial: Printer serial number
@@ -220,7 +221,31 @@ async def assign_spool_to_tray(serial: str, ams_id: int, tray_id: int, request: 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to assign spool")
 
+    # Persist assignment for usage tracking
+    await db.assign_spool_to_slot(request.spool_id, serial, ams_id, tray_id)
+
     logger.info(f"Assigned spool {spool.id} ({spool.material}) to {serial} AMS {ams_id} tray {tray_id}")
+
+
+@router.delete("/{serial}/ams/{ams_id}/tray/{tray_id}/assign", status_code=204)
+async def unassign_spool_from_tray(serial: str, ams_id: int, tray_id: int):
+    """Remove spool assignment from an AMS slot.
+
+    This only removes the tracking assignment, not the filament setting on the printer.
+    """
+    db = await get_db()
+    await db.unassign_slot(serial, ams_id, tray_id)
+    logger.info(f"Unassigned spool from {serial} AMS {ams_id} tray {tray_id}")
+
+
+@router.get("/{serial}/assignments")
+async def get_slot_assignments(serial: str):
+    """Get all spool-to-slot assignments for a printer.
+
+    Returns list of assignments with spool info.
+    """
+    db = await get_db()
+    return await db.get_slot_assignments(serial)
 
 
 @router.post("/{serial}/ams/{ams_id}/tray/{tray_id}/reset", status_code=204)

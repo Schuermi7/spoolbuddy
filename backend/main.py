@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import Set, Optional
+from typing import Set, Optional, Dict
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +15,7 @@ from api import spools_router, printers_router
 from api.printers import set_printer_manager
 from models import PrinterState
 from tags import TagDecoder, SpoolEaseEncoder
+from usage_tracker import UsageTracker, estimate_weight_from_percent
 
 # Configure logging
 logging.basicConfig(
@@ -26,6 +27,9 @@ logger = logging.getLogger(__name__)
 # Global state
 printer_manager = PrinterManager()
 websocket_clients: Set[WebSocket] = set()
+usage_tracker = UsageTracker()
+# Track previous printer states for comparison
+_previous_states: Dict[str, PrinterState] = {}
 
 
 async def broadcast_message(message: dict):
@@ -46,8 +50,69 @@ async def broadcast_message(message: dict):
     websocket_clients.difference_update(disconnected)
 
 
+async def on_usage_logged(serial: str, print_name: str, tray_usage: dict):
+    """Handle filament usage detection from print completion.
+
+    Args:
+        serial: Printer serial number
+        print_name: Name of the completed print
+        tray_usage: Dict of (ams_id, tray_id) -> percent_used
+    """
+    db = await get_db()
+
+    for (ams_id, tray_id), percent_used in tray_usage.items():
+        # Look up assigned spool for this slot
+        spool_id = await db.get_spool_for_slot(serial, ams_id, tray_id)
+
+        if not spool_id:
+            logger.debug(
+                f"No spool assigned to slot ({ams_id}, {tray_id}) on {serial}, "
+                f"skipping usage logging"
+            )
+            continue
+
+        # Get spool to calculate weight from percentage
+        spool = await db.get_spool(spool_id)
+        if not spool:
+            continue
+
+        # Estimate grams used
+        label_weight = spool.label_weight or 1000
+        weight_used = estimate_weight_from_percent(percent_used, label_weight)
+
+        # Log usage history
+        await db.log_usage(spool_id, serial, print_name, weight_used)
+
+        # Update spool consumption
+        await db.update_spool_consumption(spool_id, weight_used)
+
+        logger.info(
+            f"Logged usage for spool {spool_id}: {weight_used:.1f}g "
+            f"({percent_used}% of {label_weight}g spool) from '{print_name}'"
+        )
+
+    # Broadcast usage update to UI
+    await broadcast_message({
+        "type": "usage_logged",
+        "serial": serial,
+        "print_name": print_name,
+        "tray_usage": {f"{k[0]}_{k[1]}": v for k, v in tray_usage.items()},
+    })
+
+
 def on_printer_state_update(serial: str, state: PrinterState):
     """Handle printer state update from MQTT."""
+    global _previous_states
+
+    # Get previous state for comparison
+    prev_state = _previous_states.get(serial)
+
+    # Update usage tracker (detects print start/end)
+    usage_tracker.on_state_update(serial, state, prev_state)
+
+    # Store current state as previous for next update
+    _previous_states[serial] = state.model_copy()
+
     # Convert to dict for JSON serialization
     message = {
         "type": "printer_state",
@@ -93,6 +158,10 @@ async def lifespan(app: FastAPI):
     # Initialize database
     await get_db()
     logger.info("Database initialized")
+
+    # Set up usage tracker
+    usage_tracker.set_usage_callback(on_usage_logged)
+    usage_tracker.set_event_loop(asyncio.get_running_loop())
 
     # Set up printer manager
     set_printer_manager(printer_manager)

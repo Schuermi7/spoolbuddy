@@ -73,11 +73,23 @@ CREATE TABLE IF NOT EXISTS usage_history (
     timestamp INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
+-- Spool-to-AMS slot assignments (persistent mapping)
+CREATE TABLE IF NOT EXISTS spool_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spool_id TEXT REFERENCES spools(id) ON DELETE CASCADE,
+    printer_serial TEXT NOT NULL,
+    ams_id INTEGER NOT NULL,
+    tray_id INTEGER NOT NULL,
+    assigned_at INTEGER DEFAULT (strftime('%s', 'now')),
+    UNIQUE(printer_serial, ams_id, tray_id)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_spools_tag_id ON spools(tag_id);
 CREATE INDEX IF NOT EXISTS idx_spools_material ON spools(material);
 CREATE INDEX IF NOT EXISTS idx_k_profiles_spool ON k_profiles(spool_id);
 CREATE INDEX IF NOT EXISTS idx_usage_history_spool ON usage_history(spool_id);
+CREATE INDEX IF NOT EXISTS idx_spool_assignments_slot ON spool_assignments(printer_serial, ams_id, tray_id);
 """
 
 
@@ -243,6 +255,149 @@ class Database:
         async with self.conn.execute("SELECT * FROM printers WHERE auto_connect = 1") as cursor:
             rows = await cursor.fetchall()
             return [Printer(**{**dict(row), 'auto_connect': True}) for row in rows]
+
+    # ============ Spool Assignment Operations ============
+
+    async def assign_spool_to_slot(
+        self, spool_id: str, printer_serial: str, ams_id: int, tray_id: int
+    ) -> bool:
+        """Assign a spool to an AMS slot (upsert)."""
+        now = int(time.time())
+        await self.conn.execute(
+            """INSERT INTO spool_assignments (spool_id, printer_serial, ams_id, tray_id, assigned_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(printer_serial, ams_id, tray_id) DO UPDATE SET
+               spool_id = excluded.spool_id,
+               assigned_at = excluded.assigned_at""",
+            (spool_id, printer_serial, ams_id, tray_id, now)
+        )
+        await self.conn.commit()
+        return True
+
+    async def unassign_slot(self, printer_serial: str, ams_id: int, tray_id: int) -> bool:
+        """Remove spool assignment from a slot."""
+        cursor = await self.conn.execute(
+            "DELETE FROM spool_assignments WHERE printer_serial = ? AND ams_id = ? AND tray_id = ?",
+            (printer_serial, ams_id, tray_id)
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def get_spool_for_slot(
+        self, printer_serial: str, ams_id: int, tray_id: int
+    ) -> Optional[str]:
+        """Get spool ID assigned to a slot."""
+        async with self.conn.execute(
+            "SELECT spool_id FROM spool_assignments WHERE printer_serial = ? AND ams_id = ? AND tray_id = ?",
+            (printer_serial, ams_id, tray_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row['spool_id'] if row else None
+
+    async def get_slot_assignments(self, printer_serial: str) -> list[dict]:
+        """Get all spool assignments for a printer."""
+        async with self.conn.execute(
+            """SELECT sa.*, s.material, s.color_name, s.rgba, s.brand
+               FROM spool_assignments sa
+               LEFT JOIN spools s ON sa.spool_id = s.id
+               WHERE sa.printer_serial = ?""",
+            (printer_serial,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    # ============ Usage History Operations ============
+
+    async def log_usage(
+        self, spool_id: str, printer_serial: str, print_name: str, weight_used: float
+    ) -> int:
+        """Log filament usage for a print job."""
+        cursor = await self.conn.execute(
+            """INSERT INTO usage_history (spool_id, printer_serial, print_name, weight_used)
+               VALUES (?, ?, ?, ?)""",
+            (spool_id, printer_serial, print_name, weight_used)
+        )
+        await self.conn.commit()
+        return cursor.lastrowid
+
+    async def get_usage_history(self, spool_id: Optional[str] = None, limit: int = 100) -> list[dict]:
+        """Get usage history, optionally filtered by spool."""
+        if spool_id:
+            query = """SELECT uh.*, s.material, s.color_name, s.brand
+                       FROM usage_history uh
+                       LEFT JOIN spools s ON uh.spool_id = s.id
+                       WHERE uh.spool_id = ?
+                       ORDER BY uh.timestamp DESC LIMIT ?"""
+            params = (spool_id, limit)
+        else:
+            query = """SELECT uh.*, s.material, s.color_name, s.brand
+                       FROM usage_history uh
+                       LEFT JOIN spools s ON uh.spool_id = s.id
+                       ORDER BY uh.timestamp DESC LIMIT ?"""
+            params = (limit,)
+
+        async with self.conn.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def update_spool_consumption(
+        self, spool_id: str, weight_used: float, new_weight: Optional[int] = None
+    ) -> Optional[Spool]:
+        """Update spool consumption after a print.
+
+        Args:
+            spool_id: Spool ID
+            weight_used: Grams of filament consumed
+            new_weight: Optional new current weight (from scale)
+        """
+        spool = await self.get_spool(spool_id)
+        if not spool:
+            return None
+
+        now = int(time.time())
+        updates = ["updated_at = ?"]
+        values = [now]
+
+        # Increment consumption counters
+        new_consumed_add = (spool.consumed_since_add or 0) + weight_used
+        new_consumed_weight = (spool.consumed_since_weight or 0) + weight_used
+        updates.extend(["consumed_since_add = ?", "consumed_since_weight = ?"])
+        values.extend([new_consumed_add, new_consumed_weight])
+
+        # Update current weight if provided (from scale) or calculate from consumption
+        if new_weight is not None:
+            updates.append("weight_current = ?")
+            values.append(new_weight)
+            # Reset consumed_since_weight when scale reading is taken
+            updates[-2] = "consumed_since_weight = 0"
+            values[-2] = 0
+        elif spool.weight_current is not None:
+            # Decrement current weight by usage
+            calculated_weight = max(0, spool.weight_current - int(weight_used))
+            updates.append("weight_current = ?")
+            values.append(calculated_weight)
+
+        values.append(spool_id)
+        query = f"UPDATE spools SET {', '.join(updates)} WHERE id = ?"
+        await self.conn.execute(query, values)
+        await self.conn.commit()
+
+        return await self.get_spool(spool_id)
+
+    async def set_spool_weight(self, spool_id: str, weight: int) -> Optional[Spool]:
+        """Set spool current weight from scale and reset consumed_since_weight."""
+        spool = await self.get_spool(spool_id)
+        if not spool:
+            return None
+
+        now = int(time.time())
+        await self.conn.execute(
+            """UPDATE spools SET weight_current = ?, consumed_since_weight = 0, updated_at = ?
+               WHERE id = ?""",
+            (weight, now, spool_id)
+        )
+        await self.conn.commit()
+        return await self.get_spool(spool_id)
 
 
 # Global database instance
