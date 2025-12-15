@@ -1,10 +1,11 @@
 [target.xtensa-esp32s3-none-elf]
 runner = "espflash flash --monitor"
-
-[build]
+# ESP32 needs -nostartfiles - moved here from [build] to not affect other targets
 rustflags = [
     "-C", "link-arg=-nostartfiles",
 ]
+
+[build]
 target = "xtensa-esp32s3-none-elf"
 
 [unstable]

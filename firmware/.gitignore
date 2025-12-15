@@ -1,0 +1,9 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Cargo lock for binaries is usually committed, but not for libraries
+# Cargo.lock
+
+# Generated files
+simulator/screenshots/test.png
