@@ -168,6 +168,12 @@ class Database:
         await self.conn.commit()
         return cursor.rowcount > 0
 
+    async def get_spool_by_tag(self, tag_id: str) -> Optional[Spool]:
+        """Get a spool by tag ID (base64-encoded UID)."""
+        async with self.conn.execute("SELECT * FROM spools WHERE tag_id = ?", (tag_id,)) as cursor:
+            row = await cursor.fetchone()
+            return Spool(**dict(row)) if row else None
+
     # ============ Printer Operations ============
 
     async def get_printers(self) -> list[Printer]:

@@ -1,7 +1,7 @@
 # SpoolBuddy - Project Plan
 
 > A smart filament management system for Bambu Lab 3D printers.
-> Based on [SpoolEase](https://github.com/yanshay/SpoolEase) by yanshay.
+> Inspired by [SpoolEase](https://github.com/yanshay/SpoolEase) - built from scratch.
 
 ---
 
@@ -31,85 +31,87 @@ SpoolBuddy is a reimagined filament management system that combines:
 
 | Aspect | SpoolEase | SpoolBuddy |
 |--------|-----------|--------------|
-| Architecture | Embedded (ESP32) | Server + Device |
-| Display | 3.5" embedded (480×320) | 4.3" HDMI (800×480) |
+| Architecture | Standalone embedded | Server + ESP32 Device |
+| Device | ESP32-S3 + 3.5" (480×320) | ESP32-S3 + 4.3" (800×480) |
 | Console + Scale | Separate devices | Combined unit |
-| UI Framework | Slint (embedded) | Web (Preact) |
-| Updates | Firmware flash | Server update |
-| Database | CSV on SD card | SQLite |
+| Device UI | Slint (embedded) | LVGL (embedded) |
+| Web UI | Embedded web server | Dedicated server (Preact) |
+| Database | CSV on SD card | SQLite on server |
 | NFC Reader | PN532 (~5cm range) | PN5180 (~20cm range) |
+| Codebase | Reference only | Built from scratch |
 
 ### Goals
 
-1. **Modern UI** - Professional web-based interface
-2. **Easy updates** - Change server, not firmware
-3. **Multi-device** - Same UI on device, tablet, browser
-4. **Maintainable** - Standard web stack, easier development
-5. **Feature parity** - All SpoolEase features, then extend
+1. **Modern UI** - Professional web-based interface accessible from any device
+2. **Easy updates** - Server updates don't require device reflashing
+3. **Multi-device** - Same web UI on device, tablet, browser
+4. **Maintainable** - Standard web stack, custom ESP32 firmware
+5. **Independent** - No external code dependencies, fully owned codebase
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         SERVER (Docker)                          │
-│                                                                  │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌───────────┐  │
-│  │ Rust Backend│ │  Web UI     │ │  Database   │ │ NFS Export│  │
-│  │   (Axum)    │ │  (Preact)   │ │  (SQLite)   │ │           │  │
-│  │             │ │             │ │             │ │ Device    │  │
-│  │ • MQTT      │ │ • Inventory │ │ • Spools    │ │ rootfs    │  │
-│  │ • FTP/Gcode │ │ • Printers  │ │ • Printers  │ │           │  │
-│  │ • REST API  │ │ • Dashboard │ │ • K-Values  │ │           │  │
-│  │ • WebSocket │ │ • Settings  │ │ • History   │ │           │  │
-│  └──────┬──────┘ └──────┬──────┘ └─────────────┘ └─────┬─────┘  │
-│         │               │                              │        │
-│         └───────────────┼──────────────────────────────┘        │
-│                         │                                        │
-└─────────────────────────┼────────────────────────────────────────┘
-                          │
-           ┌──────────────┼──────────────┐
-           │ HTTP/WS      │ WebSocket    │ NFS
-           ▼              ▼              ▼
-    ┌───────────┐  ┌───────────┐  ┌─────────────────────────────┐
-    │  Browser  │  │  Tablet   │  │     SpoolBuddy Device     │
-    │           │  │           │  │                             │
-    │  Web UI   │  │  Web UI   │  │  ┌─────────────────────┐    │
-    │           │  │           │  │  │  Raspberry Pi Zero  │    │
-    └───────────┘  └───────────┘  │  │       2 W           │    │
-                                  │  │                     │    │
-                                  │  │  Boot: SD (r/o)     │    │
-                                  │  │  Root: NFS mount    │    │
-                                  │  │  UI: Chromium kiosk │    │
-                                  │  │                     │    │
-                                  │  │  GPIO:              │    │
-                                  │  │  ├── PN5180 (SPI)   │    │
-                                  │  │  └── HX711 (GPIO)   │    │
-                                  │  └─────────────────────┘    │
-                                  │                             │
-                                  │  ┌───────┐ ┌───────┐ ┌───┐  │
-                                  │  │Display│ │ NFC   │ │Scale│ │
-                                  │  │ 4.3"  │ │PN5180 │ │     │ │
-                                  │  └───────┘ └───────┘ └───┘  │
-                                  └─────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                      SERVER (Docker)                        │
+│                                                             │
+│  ┌──────────────┐  ┌─────────────┐  ┌─────────────┐        │
+│  │Python Backend│  │   Web UI    │  │  Database   │        │
+│  │  (FastAPI)   │  │  (Preact)   │  │  (SQLite)   │        │
+│  │              │  │             │  │             │        │
+│  │ • MQTT       │  │ • Inventory │  │ • Spools    │        │
+│  │ • REST API   │  │ • Printers  │  │ • Printers  │        │
+│  │ • WebSocket  │  │ • Dashboard │  │ • K-Values  │        │
+│  │ • Tag decode │  │ • Settings  │  │ • History   │        │
+│  └──────┬───────┘  └──────┬──────┘  └─────────────┘        │
+│         │                 │                                 │
+│         └─────────────────┘                                 │
+│                  │                                          │
+└──────────────────┼──────────────────────────────────────────┘
+                   │
+    ┌──────────────┼──────────────┐
+    │ HTTP/WS      │              │ WebSocket
+    ▼              ▼              ▼
+┌─────────┐  ┌─────────┐  ┌─────────────────────────────────┐
+│ Browser │  │ Tablet  │  │      SpoolBuddy Device          │
+│         │  │         │  │                                 │
+│ Web UI  │  │ Web UI  │  │  ┌───────────────────────────┐  │
+│         │  │         │  │  │  ESP32-S3-Touch-LCD-4.3   │  │
+└─────────┘  └─────────┘  │  │  (Waveshare)              │  │
+                          │  │                           │  │
+                          │  │  • 4.3" 800×480 touch     │  │
+                          │  │  • WiFi + BLE 5           │  │
+                          │  │  • 8MB Flash, 8MB PSRAM   │  │
+                          │  │  • Custom firmware (Rust) │  │
+                          │  │                           │  │
+                          │  │  Peripherals:             │  │
+                          │  │  ├── PN5180 (SPI) - NFC   │  │
+                          │  │  └── HX711 (GPIO) - Scale │  │
+                          │  └───────────────────────────┘  │
+                          │                                 │
+                          │      ┌───────┐  ┌───────┐       │
+                          │      │PN5180 │  │ Scale │       │
+                          │      │  NFC  │  │ HX711 │       │
+                          │      └───────┘  └───────┘       │
+                          └─────────────────────────────────┘
 ```
 
 ### Communication Flow
 
 ```
-Device                          Server
-  │                               │
-  │◄──── NFS mount (rootfs) ─────►│
-  │                               │
-  │◄──── WebSocket ──────────────►│
-  │      • Tag detected           │
-  │      • Weight changed         │
-  │      • Commands (write tag)   │
-  │                               │
-  │◄──── HTTP (Chromium) ────────►│
-  │      • Web UI                 │
-  │                               │
+ESP32 Device                    Server
+     │                            │
+     │◄────── WebSocket ─────────►│
+     │        • Tag detected      │
+     │        • Weight changed    │
+     │        • Tag write cmd     │
+     │        • Config sync       │
+     │                            │
+     │◄────── HTTP ──────────────►│
+     │        • Web UI (browser)  │
+     │        • OTA updates       │
+     │                            │
 ```
 
 ---
@@ -120,39 +122,48 @@ Device                          Server
 
 | Component | Choice | Interface | Notes |
 |-----------|--------|-----------|-------|
-| **SBC** | Raspberry Pi Zero 2 W | - | WiFi, GPIO, low power |
-| **Display** | Waveshare 4.3" HDMI LCD (B) | Mini-HDMI | 800×480, IPS, capacitive touch |
+| **Main Board** | Waveshare ESP32-S3-Touch-LCD-4.3 | - | ESP32-S3, 8MB Flash, 8MB PSRAM |
+| **Display** | Built-in 4.3" IPS | Parallel RGB | 800×480, 5-point capacitive touch |
 | **NFC Reader** | PN5180 module | SPI | Extended range (~20cm), MIFARE Crypto1 support |
 | **Scale** | HX711 + Load Cell | GPIO | Standard load cell setup |
 | **Power** | USB-C 5V/2A | - | Single power input |
+
+### ESP32-S3-Touch-LCD-4.3 Specifications
+
+- **Processor**: Xtensa 32-bit LX7 dual-core, up to 240MHz
+- **Memory**: 512KB SRAM, 384KB ROM, 8MB PSRAM, 8MB Flash
+- **Wireless**: 2.4GHz WiFi (802.11 b/g/n), Bluetooth 5 (LE)
+- **Display**: 4.3" IPS, 800×480, 65K colors, capacitive touch (I2C, 5-point)
+- **Interfaces**: SPI, I2C, UART, CAN, RS485, USB, TF card slot
+- **Wiki**: https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-4.3
 
 ### Hardware Sources
 
 | Component | Source | Price | Status |
 |-----------|--------|-------|--------|
-| Display | [Amazon.de](https://www.amazon.de/Waveshare-4-3inch-HDMI-LCD-Capacitive/dp/B07MB9MYYS) | ~€55 | Ordered |
+| ESP32 Display | [Amazon.de](https://www.amazon.de/dp/B0CNZ6CHR7) | ~€45 | Ordered |
 | NFC Reader | [LaskaKit.cz](https://www.laskakit.cz/en/rfid-ctecka-s-vestavenou-antenou-nfc-rf-pn5180-iso15693-cteni-i-zapis/) | €10.23 | Ordered |
+| HX711 + Load Cell | TBD | ~€10 | TBD |
 
 ### GPIO Pin Allocation
 
 ```
-Raspberry Pi Zero 2 W GPIO:
+ESP32-S3-Touch-LCD-4.3 GPIO (directly from connectors):
 
-PN5180 (SPI):
-  - MOSI: GPIO 10 (Pin 19)
-  - MISO: GPIO 9 (Pin 21)
-  - SCLK: GPIO 11 (Pin 23)
-  - NSS:  GPIO 8 (Pin 24)
-  - BUSY: GPIO 25 (Pin 22)
-  - RST:  GPIO 24 (Pin 18)
+PN5180 (SPI - directly on expansion header):
+  - MOSI: GPIO 11
+  - MISO: GPIO 13
+  - SCLK: GPIO 12
+  - NSS:  GPIO 10
+  - BUSY: GPIO 14
+  - RST:  GPIO 21
 
-HX711 (Scale):
-  - DT:   GPIO 5 (Pin 29)
-  - SCK:  GPIO 6 (Pin 31)
+HX711 (Scale - directly on expansion header):
+  - DT:   GPIO 1
+  - SCK:  GPIO 2
 
-Display:
-  - HDMI (no GPIO needed)
-  - Touch via USB
+Note: Pin assignments TBD based on available GPIOs on expansion connectors.
+      Check Waveshare wiki for actual pinout.
 ```
 
 ### Physical Design
@@ -168,34 +179,37 @@ Display:
 
 ## Software Components
 
-### 1. Server Backend (Rust)
+### 1. Server Backend (Python)
 
-**Framework:** Axum
+**Framework:** FastAPI + Uvicorn
 
 **Responsibilities:**
 - REST API for web UI
 - WebSocket for device communication
 - MQTT client for Bambu Lab printers
-- FTPS client for G-code file access
-- G-code analysis for filament usage
+- Tag encoding/decoding (SpoolEase, Bambu Lab, OpenPrintTag formats)
 - Database operations (SQLite)
-- NFS export for device rootfs
+- Serve static web UI
 
-**Portable code from SpoolEase:**
-- `bambu_api.rs` - MQTT message structures (direct copy)
-- `gcode_analysis.rs` - G-code parsing (direct copy)
-- `threemf_extractor.rs` - 3MF handling (direct copy)
-- `ndef.rs` - NDEF message handling (adapt)
-- Business logic from `bambu.rs` (reimplement)
-- Store logic from `store.rs` (reimplement for SQLite)
-
-**New implementations needed:**
-- Axum web server and routes
-- SQLite database layer
-- MQTT client (using `rumqttc`)
-- FTP client (using `suppaftp`)
-- WebSocket handler for devices
-- NFS server configuration
+**Structure:**
+```
+backend/
+├── main.py           # FastAPI app, WebSocket handler
+├── config.py         # Settings
+├── models.py         # Pydantic models
+├── api/              # REST API routes
+│   ├── spools.py
+│   └── printers.py
+├── db/               # Database layer
+│   └── database.py
+├── mqtt/             # Printer MQTT client
+│   ├── client.py
+│   └── bambu_api.rs  # Message structures
+└── tags/             # NFC tag encoding/decoding
+    ├── spoolease.py
+    ├── bambulab.py
+    └── openprinttag.py
+```
 
 ### 2. Web UI (Preact + TypeScript)
 
@@ -203,123 +217,126 @@ Display:
 
 **Pages:**
 - **Dashboard** - Overview, printer status, current print
-- **Inventory** - Spool list, search, filter (already started!)
-- **Printers** - Printer configuration, status
+- **Inventory** - Spool list, search, filter
+- **Printers** - Printer configuration, AMS status
 - **Spool Detail** - Edit spool, K-profiles, history
-- **Settings** - Server config, WiFi, display settings
-- **Scale Calibration** - Tare, calibrate scale
+- **Settings** - Server config, device settings
 
-**Shared with device:**
-- Same codebase serves all clients
-- Responsive design (desktop, tablet, device)
-- Device-specific views (e.g., simplified for 4.3" screen)
+**Features:**
+- Responsive design (desktop, tablet, device screen)
+- Real-time updates via WebSocket
+- Works in browser and on device's built-in display
 
-### 3. Device Service (Python)
+### 3. Device Firmware (Rust/ESP32)
+
+**Target:** ESP32-S3-Touch-LCD-4.3 (Waveshare)
+
+**Framework:** esp-hal + embassy (async)
 
 **Responsibilities:**
 - Read NFC tags (PN5180 via SPI)
-- Read scale weight (HX711)
-- Send data to server via WebSocket
-- Receive commands (write NFC, tare scale)
-- Local caching if server offline
-
-**Libraries:**
-- `spidev` + custom PN5180 driver - PN5180 NFC
-- `hx711` - HX711 scale ADC
-- `websockets` - WebSocket client
-- `RPi.GPIO` or `gpiozero` - GPIO access
+- Read scale weight (HX711 via GPIO)
+- Display UI (LVGL or custom)
+- WiFi connection to server
+- WebSocket communication
+- Local display of spool info, weight, status
 
 **Structure:**
 ```
-device-service/
-├── main.py           # Entry point, main loop
-├── nfc_reader.py     # PN5180 interface
-├── scale.py          # HX711 interface
-├── websocket.py      # Server communication
-├── config.py         # Configuration
-└── requirements.txt
+firmware/
+├── Cargo.toml
+├── src/
+│   ├── main.rs         # Entry point, task spawning
+│   ├── wifi.rs         # WiFi connection
+│   ├── websocket.rs    # Server communication
+│   ├── nfc/
+│   │   ├── mod.rs
+│   │   └── pn5180.rs   # PN5180 driver
+│   ├── scale/
+│   │   ├── mod.rs
+│   │   └── hx711.rs    # HX711 driver
+│   └── ui/
+│       ├── mod.rs
+│       └── screens.rs  # LVGL screens
+└── build.rs
 ```
 
-### 4. Device System Image
-
-**Base:** Raspberry Pi OS Lite (64-bit)
-
-**Boot Configuration:**
-- Minimal SD card (~50MB, read-only)
-- Kernel + initramfs + boot config only
-- Root filesystem via NFS
-
-**Runtime:**
-- Chromium in kiosk mode (full screen, no UI chrome)
-- Device service (systemd)
-- Auto-connect to server WiFi
-- Watchdog for reliability
-
-**NFS Root Setup:**
-```
-Server exports:
-  /srv/spoolbuddy/rootfs  →  Device mounts as /
-
-Device /etc/fstab (in initramfs):
-  server:/srv/spoolbuddy/rootfs / nfs defaults 0 0
-```
+**Key Crates:**
+- `esp-hal` - ESP32-S3 hardware abstraction
+- `embassy-executor` - Async runtime
+- `embassy-net` - Networking
+- `embedded-graphics` or `lvgl` - UI rendering
 
 ---
 
 ## Development Phases
 
-### Phase 1: Foundation (MVP)
+### Phase 1: Foundation ✅ Complete
 
 **Goal:** Basic working system, prove architecture
 
 **Server:**
-- [x] Project setup (Cargo workspace)
-- [x] Basic Axum server with REST API
+- [x] FastAPI server with REST API
 - [x] SQLite database schema and migrations
 - [x] Spool CRUD operations
-- [x] WebSocket endpoint for devices
+- [x] WebSocket endpoint for UI updates
 - [x] Static file serving for web UI
 
 **Web UI:**
 - [x] Inventory page with search/filter
-- [x] Spool detail/edit page
-- [x] Dashboard with stats
+- [x] Spool detail/edit modal
+- [x] Stats bar with inventory overview
 - [x] WebSocket integration for live updates
 
-**Device:**
-- [ ] RPi image with Chromium kiosk
-- [ ] Basic Python service (NFC read, scale read)
-- [ ] WebSocket connection to server
-- [ ] NFS root setup
+**Deliverable:** Can view/edit spools via web UI
 
-**Deliverable:** Can view/edit spools, read NFC tags, read weight
+### Phase 2: Printer Integration ✅ Complete
 
-### Phase 2: Printer Integration
-
-**Goal:** Connect to Bambu Lab printers
+**Goal:** Connect to Bambu Lab printers via MQTT
 
 **Server:**
-- [ ] Port `bambu_api.rs` structures
-- [ ] MQTT client for printer communication
-- [ ] Printer discovery (SSDP)
-- [ ] Printer state tracking
-- [ ] AMS slot configuration
-- [ ] Tag information encoding/decoding
+- [x] MQTT client for printer communication
+- [x] Printer state tracking (print status, AMS data)
+- [x] AMS slot configuration commands
+- [x] K-profile selection per slot
+- [x] RFID re-read trigger (`ams_get_rfid`)
+- [x] Tag encoding/decoding (SpoolEase V2, Bambu Lab, OpenPrintTag)
 
 **Web UI:**
-- [ ] Printer management page
-- [ ] Printer status display
-- [ ] AMS slot visualization
+- [x] Printer management page (add/edit/delete)
+- [x] Real-time printer status display
+- [x] AMS slot visualization with colors, materials, K-values
+- [x] Active tray indicator
+- [x] Slot context menu (re-read RFID, select K-profile)
 
-**Deliverable:** Auto-detect printers, show status, configure slots
+**Deliverable:** Full printer MQTT integration with AMS control
 
-### Phase 3: Filament Tracking
+### Phase 3: Device Firmware 🔄 Next
+
+**Goal:** ESP32-S3 firmware for NFC + Scale
+
+**Firmware:**
+- [ ] Project setup (esp-hal + embassy)
+- [ ] WiFi connection and config portal
+- [ ] WebSocket client to server
+- [ ] PN5180 NFC driver (SPI)
+- [ ] HX711 scale driver (GPIO)
+- [ ] Basic LVGL UI (weight display, status)
+- [ ] Tag read → WebSocket → Server flow
+
+**Server:**
+- [x] WebSocket handler for tag_detected messages
+- [x] Tag decoding and spool matching
+- [ ] Tag write command handling
+
+**Deliverable:** Device reads NFC tags and weight, sends to server
+
+### Phase 4: Filament Tracking
 
 **Goal:** Track filament usage during prints
 
 **Server:**
-- [ ] Port `gcode_analysis.rs`
-- [ ] Port `threemf_extractor.rs`
+- [ ] G-code analysis for filament usage
 - [ ] FTP client for printer file access
 - [ ] Real-time usage tracking during print
 - [ ] Consumption history per spool
@@ -331,9 +348,9 @@ Device /etc/fstab (in initramfs):
 
 **Deliverable:** Accurate filament tracking, usage history
 
-### Phase 4: K-Profile Management
+### Phase 5: K-Profile Management
 
-**Goal:** Pressure advance calibration management
+**Goal:** Full pressure advance calibration management
 
 **Server:**
 - [ ] K-profile storage per spool/printer/nozzle
@@ -346,29 +363,27 @@ Device /etc/fstab (in initramfs):
 
 **Deliverable:** Full pressure advance management
 
-### Phase 5: NFC Writing & Advanced Features
+### Phase 6: NFC Writing & Advanced Features
 
-**Goal:** Complete feature parity + extras
+**Goal:** Complete feature set
+
+**Firmware:**
+- [ ] NFC tag writing (SpoolEase V2 format)
+- [ ] Scale calibration
+- [ ] Offline mode with sync
 
 **Server:**
-- [ ] NFC tag writing commands
-- [ ] Tag format support (SpoolEase, Bambu, OpenPrint)
+- [ ] Tag write command generation
 - [ ] Backup/restore functionality
-- [ ] Multi-user support (optional)
-
-**Device:**
-- [ ] NFC write implementation
-- [ ] Scale calibration UI
-- [ ] Offline mode with sync
 
 **Web UI:**
 - [ ] Tag encoding page
 - [ ] Backup/restore UI
 - [ ] Settings page
 
-**Deliverable:** Full SpoolEase feature parity
+**Deliverable:** Full-featured filament management
 
-### Phase 6: Polish & Documentation
+### Phase 7: Polish & Documentation
 
 **Goal:** Production ready
 
@@ -377,7 +392,7 @@ Device /etc/fstab (in initramfs):
 - [ ] User documentation
 - [ ] Installation guide
 - [ ] Docker compose setup
-- [ ] Device image builder
+- [ ] Firmware build/flash instructions
 
 ---
 
@@ -541,36 +556,31 @@ WS     /ws/ui                   - UI WebSocket (live updates)
 
 ```
 spoolbuddy/
-├── server/
-│   ├── Cargo.toml
-│   ├── src/
-│   │   ├── main.rs
-│   │   ├── api/
-│   │   │   ├── mod.rs
-│   │   │   ├── spools.rs
-│   │   │   ├── printers.rs
-│   │   │   └── device.rs
-│   │   ├── db/
-│   │   │   ├── mod.rs
-│   │   │   ├── schema.rs
-│   │   │   └── queries.rs
-│   │   ├── mqtt/
-│   │   │   ├── mod.rs
-│   │   │   ├── client.rs
-│   │   │   └── bambu_api.rs  # Ported from SpoolEase
-│   │   ├── gcode/
-│   │   │   ├── mod.rs
-│   │   │   ├── analysis.rs    # Ported from SpoolEase
-│   │   │   └── threemf.rs     # Ported from SpoolEase
-│   │   ├── websocket/
-│   │   │   ├── mod.rs
-│   │   │   ├── device.rs
-│   │   │   └── ui.rs
-│   │   └── config.rs
-│   └── migrations/
-│       └── 001_initial.sql
+├── backend/                    # Python server
+│   ├── main.py
+│   ├── config.py
+│   ├── models.py
+│   ├── requirements.txt
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── spools.py
+│   │   └── printers.py
+│   ├── db/
+│   │   ├── __init__.py
+│   │   └── database.py
+│   ├── mqtt/
+│   │   ├── __init__.py
+│   │   ├── client.py
+│   │   └── bambu_api.py
+│   └── tags/
+│       ├── __init__.py
+│       ├── models.py
+│       ├── decoder.py
+│       ├── spoolease.py
+│       ├── bambulab.py
+│       └── openprinttag.py
 │
-├── web/
+├── web/                        # Preact frontend
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── src/
@@ -578,81 +588,48 @@ spoolbuddy/
 │   │   ├── App.tsx
 │   │   ├── components/
 │   │   ├── pages/
-│   │   ├── lib/
-│   │   └── hooks/
+│   │   └── lib/
 │   └── public/
 │
-├── device/
-│   ├── service/
-│   │   ├── main.py
-│   │   ├── nfc_reader.py
-│   │   ├── scale.py
-│   │   ├── websocket.py
-│   │   └── requirements.txt
-│   ├── image/
-│   │   ├── build.sh
-│   │   ├── config.txt
-│   │   └── kiosk.service
-│   └── README.md
+├── firmware/                   # ESP32-S3 firmware (Rust)
+│   ├── Cargo.toml
+│   ├── src/
+│   │   ├── main.rs
+│   │   ├── wifi.rs
+│   │   ├── websocket.rs
+│   │   ├── nfc/
+│   │   │   └── pn5180.rs
+│   │   ├── scale/
+│   │   │   └── hx711.rs
+│   │   └── ui/
+│   │       └── screens.rs
+│   └── build.rs
 │
 ├── docker/
-│   ├── Dockerfile.server
-│   ├── docker-compose.yml
-│   └── nfs-exports
+│   ├── Dockerfile
+│   └── docker-compose.yml
 │
-├── docs/
-│   ├── setup.md
-│   ├── hardware.md
-│   └── api.md
-│
-├── SPOOLBUDDY_PLAN.md  # This file
-├── LICENSE               # MIT (same as SpoolEase)
+├── SPOOLBUDDY_PLAN.md
+├── CLAUDE.md
+├── LICENSE
 └── README.md
 ```
 
 ---
 
-## Upstream Sync Strategy
-
-### Relationship to SpoolEase
-
-SpoolBuddy is **based on SpoolEase** but is a separate project with different architecture. We will:
-
-1. **Credit SpoolEase** prominently in README and About page
-2. **Use MIT license** (same as SpoolEase)
-3. **Watch upstream** for relevant changes
-4. **Reimplement** changes that apply to our architecture
-
-### What to Watch
-
-| SpoolEase File | SpoolBuddy Impact | Action |
-|----------------|---------------------|--------|
-| `bambu_api.rs` | Direct impact | Copy/adapt changes |
-| `gcode_analysis.rs` | Direct impact | Copy/adapt changes |
-| `bambu.rs` (state machine) | Logic changes | Reimplement |
-| `store.rs` | Data model changes | Adapt for SQLite |
-| `spool_tag.rs` | Tag format changes | Reimplement |
-| UI files | No impact | Ignore |
-| Hardware drivers | No impact | Ignore |
-
-### Process
-
-1. **Weekly check** of SpoolEase commits
-2. **Evaluate** relevance to SpoolBuddy
-3. **Document** in changelog what was synced
-4. **Test** thoroughly after any sync
-
----
-
 ## Next Steps
 
-1. **Create repository** - `github.com/<user>/spoolbuddy`
-2. **Set up project structure** - As defined above
-3. **Start Phase 1** - Foundation/MVP
-4. ~~**Order hardware**~~ - ✅ Display and NFC reader ordered
+**Current:** Phase 3 - Device Firmware
+
+1. Set up ESP32-S3 Rust project with esp-hal
+2. Implement WiFi connection
+3. Implement PN5180 NFC driver
+4. Implement HX711 scale driver
+5. WebSocket client to server
+6. Basic UI for weight/status display
 
 ---
 
 *Document created: December 2024*
 *Last updated: December 2024*
-*Based on SpoolEase by yanshay*
+*Inspired by SpoolEase - built from scratch*

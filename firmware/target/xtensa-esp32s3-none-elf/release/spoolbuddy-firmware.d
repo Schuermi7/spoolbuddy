@@ -1,0 +1,1 @@
+/opt/claude/projects/SpoolStation/firmware/target/xtensa-esp32s3-none-elf/release/spoolbuddy-firmware: /opt/claude/projects/SpoolStation/firmware/build.rs /opt/claude/projects/SpoolStation/firmware/src/main.rs

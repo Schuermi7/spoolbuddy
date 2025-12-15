@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import Set
+from typing import Set, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -14,6 +14,7 @@ from mqtt import PrinterManager
 from api import spools_router, printers_router
 from api.printers import set_printer_manager
 from models import PrinterState
+from tags import TagDecoder, SpoolEaseEncoder
 
 # Configure logging
 logging.basicConfig(
@@ -129,6 +130,69 @@ app.include_router(spools_router, prefix="/api")
 app.include_router(printers_router, prefix="/api")
 
 
+async def handle_tag_detected(websocket: WebSocket, message: dict):
+    """Handle tag_detected message from device."""
+    uid_hex = message.get("uid", "")
+    tag_type = message.get("tag_type", "")  # "NTAG", "MifareClassic1K", etc.
+
+    # Data depends on tag type
+    ndef_url = message.get("ndef_url")  # For NTAG with URL
+    ndef_records = message.get("ndef_records")  # For NTAG with raw records
+    mifare_blocks = message.get("blocks")  # For Mifare Classic
+
+    logger.info(f"Tag detected: UID={uid_hex}, type={tag_type}")
+
+    result = None
+
+    # Decode based on what data we have
+    if ndef_url:
+        result = TagDecoder.decode_ndef_url(uid_hex, ndef_url)
+    elif ndef_records:
+        result = TagDecoder.decode_ndef_records(uid_hex, ndef_records)
+    elif mifare_blocks:
+        # Convert hex strings to bytes if needed
+        blocks = {}
+        for block_num, data in mifare_blocks.items():
+            if isinstance(data, str):
+                blocks[int(block_num)] = bytes.fromhex(data)
+            else:
+                blocks[int(block_num)] = bytes(data)
+        result = TagDecoder.decode_mifare_blocks(uid_hex, blocks)
+
+    if result:
+        # Try to find matching spool in database
+        db = await get_db()
+        spool = await db.get_spool_by_tag(result.uid_base64)
+
+        if spool:
+            result.matched_spool_id = spool.id
+            logger.info(f"Tag matched to spool: {spool.id}")
+        else:
+            # Convert to spool data for potential creation
+            spool_data = TagDecoder.to_spool(result)
+            if spool_data:
+                logger.info(f"New tag detected: {spool_data.material} {spool_data.color_name}")
+
+        # Send result back to all clients
+        response = {
+            "type": "tag_result",
+            "uid": result.uid,
+            "uid_base64": result.uid_base64,
+            "tag_type": result.tag_type.value,
+            "matched_spool_id": result.matched_spool_id,
+        }
+
+        # Include parsed data
+        if result.spoolease_data:
+            response["spoolease_data"] = result.spoolease_data.model_dump()
+        if result.bambulab_data:
+            response["bambulab_data"] = result.bambulab_data.model_dump(exclude={"blocks"})
+        if result.openprinttag_data:
+            response["openprinttag_data"] = result.openprinttag_data.model_dump()
+
+        await broadcast_message(response)
+
+
 @app.websocket("/ws/ui")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time UI updates."""
@@ -140,8 +204,21 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # Keep connection alive, handle any incoming messages
             data = await websocket.receive_text()
-            # Could handle commands from UI here
-            logger.debug(f"Received from WebSocket: {data}")
+
+            try:
+                message = json.loads(data)
+                msg_type = message.get("type", "")
+
+                if msg_type == "tag_detected":
+                    await handle_tag_detected(websocket, message)
+                elif msg_type == "tag_removed":
+                    await broadcast_message({"type": "tag_removed"})
+                else:
+                    logger.debug(f"Received from WebSocket: {data}")
+
+            except json.JSONDecodeError:
+                logger.debug(f"Received non-JSON from WebSocket: {data}")
+
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
     except Exception as e:
