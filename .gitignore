@@ -1,12 +1,17 @@
-# Rust
-/target/
-server/target/
-**/*.rs.bk
-Cargo.lock
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+*.egg-info/
+.eggs/
 
 # Node
 node_modules/
-web/dist/
+frontend/dist/
 .npm
 *.log
 
@@ -25,6 +30,8 @@ web/dist/
 
 # OS
 .DS_Store
+._.DS_Store
+._*
 Thumbs.db
 
 # Environment
@@ -32,6 +39,10 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# Device
-device/service/__pycache__/
-device/service/*.pyc
+# Build artifacts
+*.pyc
+.vite/
+
+# Screenshots (reference only, don't commit large assets)
+screenshots/OrcaSlicer/
+screenshots/ha-bambulab-cards/

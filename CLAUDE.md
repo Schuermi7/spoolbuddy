@@ -1,95 +1,105 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-SpoolBuddy is a filament management system for Bambu Lab 3D printers, based on [SpoolEase](https://github.com/yanshay/SpoolEase). The original SpoolEase source code is in `spoolease_sources/`. See `SPOOLBUDDY_PLAN.md` for the roadmap of planned modifications.
-
-The system provides:
-- NFC-based spool identification (NTAG, Mifare Classic, Bambu Lab RFID tags)
-- Weight scale integration for filament tracking
+SpoolBuddy is a filament management system for Bambu Lab 3D printers. It provides:
+- NFC-based spool identification (planned)
+- Weight scale integration for filament tracking (planned)
 - Inventory management and spool catalog
-- MQTT-based automatic AMS slot configuration for X1, P1, A1, H2, P2 product lines
+- MQTT-based printer connectivity with AMS visualization
 
 ## Repository Structure
 
 ```
-spoolease_sources/
-├── core/           # ESP32-S3 embedded Rust firmware (main application)
-│   ├── src/        # Rust source files
-│   ├── ui/         # Slint UI definitions (.slint files)
-│   ├── static/     # Web assets for embedded server
-│   └── data/       # CSV catalogs (brands, materials, spool weights)
-└── shared/         # Shared Rust library (NFC, gcode, FTP, etc.)
-    └── src/        # Library source files
+SpoolBuddy/
+├── backend/           # Python FastAPI server
+│   ├── main.py        # Entry point
+│   ├── config.py      # Configuration
+│   ├── models.py      # Pydantic models
+│   ├── db/            # Database layer (SQLite)
+│   ├── mqtt/          # Bambu printer MQTT client
+│   └── api/           # REST API endpoints
+├── frontend/          # Preact web UI
+│   ├── src/
+│   │   ├── pages/     # Page components
+│   │   ├── components/# Reusable components
+│   │   └── lib/       # Utilities, WebSocket client
+│   └── dist/          # Built static files
+└── spoolease_sources/ # Reference: original SpoolEase ESP32 code
 ```
 
-## Build Commands
+## Development Commands
 
-### Core Firmware (Rust/ESP32-S3)
-
-Requires the ESP Rust toolchain (`esp` channel). Install via [espup](https://github.com/esp-rs/espup).
+### Backend (Python)
 
 ```bash
-cd spoolease_sources/core
+cd backend
 
-# Build release
-cargo build --release
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
 
-# Flash and monitor (16MB flash, DIO mode, 80MHz)
-cargo run --release
+# Install dependencies
+pip install -r requirements.txt
+
+# Run development server
+python main.py
+# or: uvicorn main:app --reload --port 3000
 ```
 
-Flash configuration is in `spoolease_sources/core/.cargo/config.toml`.
+### Frontend (Node.js)
 
-### Deploy Scripts
+```bash
+cd frontend
 
-In `spoolease_sources/core/`:
-- `deploy-beta.sh` - Deploy to beta/unstable OTA channel
-- `deploy-rel.sh` - Deploy to release OTA channel
-- `deploy-debug.sh` - Debug deployment
+# Install dependencies
+npm install
 
-These require `esp-hal-app` xtask tooling and `spoolease-bin` directory in parent directories.
+# Run development server
+npm run dev
 
-## Architecture
+# Build for production
+npm run build
+```
 
-### Core Firmware (`spoolease_sources/core/src/`)
+### Running Both
 
-A `no_std` embedded Rust application using:
-- **esp-hal** ecosystem (esp-hal, esp-wifi, esp-mbedtls, embassy-*)
-- **Slint** for touch UI (rendered via software renderer)
-- **esp-hal-app-framework** - Custom framework for WiFi, display, settings
+1. Start backend: `cd backend && python main.py`
+2. For development: `cd frontend && npm run dev` (proxies to backend)
+3. For production: Build frontend, backend serves static files
 
-Key modules:
-- `main.rs` - Entry point, hardware init, embassy task spawning
-- `bambu.rs` / `bambu_api.rs` - Printer communication via MQTT
-- `view_model.rs` - UI state management (largest file, ~150KB)
-- `store.rs` - Persistent storage (sequential-storage on flash)
-- `spool_scale.rs` - Scale communication and weight tracking
-- `web_app.rs` - Embedded web server (picoserve)
-- `my_mqtt.rs` - MQTT client for printer communication
-- `csvdb.rs` - CSV data access for catalogs
+## API Endpoints
 
-### Shared Library (`spoolease_sources/shared/src/`)
+- `GET /api/spools` - List all spools
+- `POST /api/spools` - Create spool
+- `GET /api/spools/{id}` - Get spool
+- `PUT /api/spools/{id}` - Update spool
+- `DELETE /api/spools/{id}` - Delete spool
 
-`no_std` library for reusable components:
-- `spool_tag.rs` - NFC tag data encoding/decoding (SpoolEase format)
-- `pn532_ext.rs` - PN532 NFC reader async extensions
-- `gcode_analysis.rs` / `gcode_analysis_task.rs` - Print file analysis
-- `my_ftp.rs` - Async FTP client for printer file access
-- `threemf_extractor.rs` - 3MF file parsing with miniz_oxide
+- `GET /api/printers` - List printers with status
+- `POST /api/printers` - Create/update printer
+- `POST /api/printers/{serial}/connect` - Connect to printer
+- `POST /api/printers/{serial}/disconnect` - Disconnect
 
-### UI Layer
+- `WS /ws/ui` - WebSocket for real-time updates
 
-- `spoolease_sources/core/ui/*.slint` - Slint UI definitions
-- `spoolease_sources/core/static/` - HTML/CSS served by embedded web server
+## Bambu MQTT Protocol Notes
 
-## Development Notes
+- Printers use MQTT over TLS on port 8883
+- Username: `bblp`, Password: printer's access code
+- Subscribe to: `device/{serial}/report`
+- Publish to: `device/{serial}/request`
+- AMS IDs: 0-3 = AMS A-D, 128-135 = AMS HT A-H, 254/255 = External
 
-- **Target**: `xtensa-esp32s3-none-elf`
-- **Toolchain**: `esp` channel (nightly features required)
-- **Memory**: Uses PSRAM for heap, DRAM2 for bootloader-shared area
-- **TLS certs**: In `core/src/certs/` (Bambu Lab, OTA server)
-- **Catalog data**: CSV files in `core/data/` (brands, materials, spool weights)
-- **Log level**: Set via `ESP_LOG` env var (default: `info,SpoolEase=trace`)
+## Reference Material
+
+The `spoolease_sources/` directory contains the original SpoolEase embedded code.
+Use it as reference documentation for:
+- Bambu MQTT message formats
+- AMS data structures
+- NFC tag encoding (SpoolEase format)
+
+Do NOT port this code directly - it's ESP32 embedded Rust (`no_std`).
