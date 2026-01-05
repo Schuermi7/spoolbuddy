@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 echo "=== Syncing from Debian server ==="
 cd ../../
-rsync -avr --progress --delete --exclude='lvgl-simulator-sdl/build' claude:/opt/claude/projects/SpoolStation .
+rsync -avr --progress --delete --exclude='lvgl-simulator-sdl/build' root@claude:/opt/claude/projects/SpoolStation .
 cd SpoolStation/lvgl-simulator-sdl
 
 echo "=== Copying EEZ UI files ==="

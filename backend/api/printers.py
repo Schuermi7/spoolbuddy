@@ -1,7 +1,16 @@
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
+import asyncio
+import io
 import logging
+import re
+import tempfile
+import zipfile
+from pathlib import Path
+from PIL import Image
 
 from db import get_db
+from services.bambu_ftp import download_file_try_paths_async
 from models import (
     Printer,
     PrinterCreate,
@@ -18,6 +27,49 @@ router = APIRouter(prefix="/printers", tags=["printers"])
 # Reference to printer manager (set by main.py)
 _printer_manager = None
 
+# Cache for cover images: {serial: {(subtask_name, plate_num): bytes}}
+_cover_cache: dict[str, dict[tuple[str, int], bytes]] = {}
+
+# Cover image size for ESP32 display (must match placeholder image size)
+COVER_SIZE = (100, 100)
+
+
+def resize_cover_image(image_data: bytes) -> bytes:
+    """Resize a PNG image to COVER_SIZE and convert to raw RGB565 for ESP32 display.
+
+    Args:
+        image_data: Original PNG bytes
+
+    Returns:
+        Raw RGB565 pixel data (no header, just pixels)
+    """
+    img = Image.open(io.BytesIO(image_data))
+    # Convert to RGB (no alpha needed for RGB565)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    img = img.resize(COVER_SIZE, Image.LANCZOS)
+
+    # Convert to RGB565 (16-bit: 5 bits red, 6 bits green, 5 bits blue)
+    pixels = img.load()
+    width, height = img.size
+    rgb565_data = bytearray(width * height * 2)
+
+    idx = 0
+    for y in range(height):
+        for x in range(width):
+            r, g, b = pixels[x, y]
+            # Convert 8-bit RGB to RGB565
+            r5 = (r >> 3) & 0x1F
+            g6 = (g >> 2) & 0x3F
+            b5 = (b >> 3) & 0x1F
+            rgb565 = (r5 << 11) | (g6 << 5) | b5
+            # Little-endian for ESP32
+            rgb565_data[idx] = rgb565 & 0xFF
+            rgb565_data[idx + 1] = (rgb565 >> 8) & 0xFF
+            idx += 2
+
+    return bytes(rgb565_data)
+
 
 def set_printer_manager(manager):
     """Set the printer manager reference."""
@@ -27,20 +79,57 @@ def set_printer_manager(manager):
 
 @router.get("", response_model=list[PrinterWithStatus])
 async def list_printers():
-    """Get all printers with connection status."""
+    """Get all printers with connection status and live state."""
     db = await get_db()
     printers = await db.get_printers()
 
     # Get connection statuses
     statuses = _printer_manager.get_connection_statuses() if _printer_manager else {}
 
-    return [
-        PrinterWithStatus(
+    result = []
+    for printer in printers:
+        connected = statuses.get(printer.serial, False)
+        gcode_state = None
+        print_progress = None
+        subtask_name = None
+        mc_remaining_time = None
+        cover_url = None
+        ams_units = []
+        tray_now = None
+        tray_now_left = None
+        tray_now_right = None
+
+        # Get live state if connected
+        if connected and _printer_manager:
+            state = _printer_manager.get_state(printer.serial)
+            if state:
+                gcode_state = state.gcode_state
+                print_progress = state.print_progress
+                subtask_name = state.subtask_name
+                mc_remaining_time = state.mc_remaining_time
+                ams_units = state.ams_units
+                tray_now = state.tray_now
+                tray_now_left = state.tray_now_left
+                tray_now_right = state.tray_now_right
+                # Add cover URL if printing
+                if gcode_state in ("RUNNING", "PAUSE", "PAUSED") and subtask_name:
+                    cover_url = f"/api/printers/{printer.serial}/cover"
+
+        result.append(PrinterWithStatus(
             **printer.model_dump(),
-            connected=statuses.get(printer.serial, False)
-        )
-        for printer in printers
-    ]
+            connected=connected,
+            gcode_state=gcode_state,
+            print_progress=print_progress,
+            subtask_name=subtask_name,
+            mc_remaining_time=mc_remaining_time,
+            cover_url=cover_url,
+            ams_units=ams_units,
+            tray_now=tray_now,
+            tray_now_left=tray_now_left,
+            tray_now_right=tray_now_right,
+        ))
+
+    return result
 
 
 @router.get("/{serial}", response_model=PrinterWithStatus)
@@ -322,3 +411,120 @@ async def get_calibrations(serial: str, nozzle_diameter: str = "0.4"):
     calibrations = await _printer_manager.get_kprofiles(serial, nozzle_diameter)
     logger.info(f"[API] get_calibrations({serial}): returning {len(calibrations)} K-profiles")
     return calibrations
+
+
+@router.get("/{serial}/cover")
+async def get_printer_cover(serial: str):
+    """Get the cover image for the current print job.
+
+    Downloads the 3MF file from the printer via FTP and extracts the thumbnail.
+    Results are cached per print job.
+    """
+    db = await get_db()
+    printer = await db.get_printer(serial)
+    if not printer:
+        raise HTTPException(status_code=404, detail="Printer not found")
+
+    if not _printer_manager:
+        raise HTTPException(status_code=500, detail="Printer manager not available")
+
+    if not _printer_manager.is_connected(serial):
+        raise HTTPException(status_code=400, detail="Printer not connected")
+
+    state = _printer_manager.get_state(serial)
+    if not state:
+        raise HTTPException(status_code=404, detail="Printer state not available")
+
+    # Get subtask_name (the 3MF filename)
+    subtask_name = state.subtask_name
+    if not subtask_name:
+        raise HTTPException(status_code=404, detail="No active print job")
+
+    # Extract plate number from gcode_file (e.g., "plate_1.gcode" -> 1)
+    plate_num = 1
+    gcode_file = getattr(state, "gcode_file", None)
+    if gcode_file:
+        match = re.search(r"plate_(\d+)\.gcode", gcode_file)
+        if match:
+            plate_num = int(match.group(1))
+
+    # Check cache
+    cache_key = (subtask_name, plate_num)
+    if serial in _cover_cache and cache_key in _cover_cache[serial]:
+        return Response(content=_cover_cache[serial][cache_key], media_type="application/octet-stream")
+
+    # Build 3MF filename
+    filename = subtask_name
+    if not filename.endswith(".3mf"):
+        filename = filename + ".gcode.3mf"
+
+    # Possible paths on printer
+    remote_paths = [
+        f"/{filename}",
+        f"/cache/{filename}",
+        f"/model/{filename}",
+        f"/data/{filename}",
+    ]
+
+    logger.info(f"Downloading cover for '{filename}' from {printer.ip_address}")
+
+    # Download 3MF file
+    data = await download_file_try_paths_async(
+        printer.ip_address,
+        printer.access_code,
+        remote_paths,
+        timeout=30.0,
+    )
+
+    if not data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Could not download 3MF file '{filename}' from printer"
+        )
+
+    # Extract thumbnail from 3MF (ZIP file)
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data), "r")
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=500, detail="Downloaded file is not a valid 3MF/ZIP")
+
+    try:
+        # Try common thumbnail paths
+        thumbnail_paths = [
+            f"Metadata/plate_{plate_num}.png",
+            "Metadata/plate_1.png",
+            "Metadata/thumbnail.png",
+            f"Metadata/plate_{plate_num}_small.png",
+            "Metadata/plate_1_small.png",
+            "Thumbnails/thumbnail.png",
+        ]
+
+        for thumb_path in thumbnail_paths:
+            try:
+                image_data = zf.read(thumb_path)
+                # Convert to raw RGB565 for ESP32 display
+                rgb565_data = resize_cover_image(image_data)
+                logger.info(f"Converted cover to RGB565: {len(rgb565_data)} bytes")
+                # Cache result
+                if serial not in _cover_cache:
+                    _cover_cache[serial] = {}
+                _cover_cache[serial][cache_key] = rgb565_data
+                return Response(content=rgb565_data, media_type="application/octet-stream")
+            except KeyError:
+                continue
+
+        # Try any PNG in Metadata folder
+        for name in zf.namelist():
+            if name.startswith("Metadata/") and name.endswith(".png"):
+                image_data = zf.read(name)
+                # Convert to raw RGB565 for ESP32 display
+                rgb565_data = resize_cover_image(image_data)
+                logger.info(f"Converted cover to RGB565: {len(rgb565_data)} bytes")
+                if serial not in _cover_cache:
+                    _cover_cache[serial] = {}
+                _cover_cache[serial][cache_key] = rgb565_data
+                return Response(content=rgb565_data, media_type="application/octet-stream")
+
+        raise HTTPException(status_code=404, detail="No thumbnail found in 3MF file")
+    finally:
+        zf.close()

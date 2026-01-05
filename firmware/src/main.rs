@@ -28,6 +28,12 @@ mod nfc;
 // WiFi manager with C-callable interface
 mod wifi_manager;
 
+// Backend client for server communication
+mod backend_client;
+
+// Time manager for NTP sync
+mod time_manager;
+
 // Display driver C functions (handles LVGL init and EEZ UI)
 extern "C" {
     fn display_init() -> i32;
@@ -51,6 +57,9 @@ fn main() {
         Ok(_) => info!("WiFi subsystem ready"),
         Err(e) => warn!("WiFi init failed: {}", e),
     }
+
+    // Initialize backend client (for server communication)
+    backend_client::init();
 
     // Initialize display, LVGL, and EEZ UI via C driver
     // Display uses I2C0 (GPIO15/16) for touch controller
@@ -901,6 +910,26 @@ fn main() {
         loop_count = loop_count.wrapping_add(1);
         if loop_count % 10 == 0 {
             scale_manager::poll_scale();
+        }
+
+        // Post-WiFi initialization - check frequently until WiFi connects
+        static WIFI_INIT_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WIFI_INIT_DONE.load(std::sync::atomic::Ordering::Relaxed) {
+            if loop_count % 20 == 0 && wifi_manager::is_connected() {
+                // Initialize SNTP for time sync (may take time)
+                time_manager::init_sntp();
+                // Set backend server URL
+                backend_client::set_server_url("http://192.168.255.16:3000");
+                // Sync time immediately from backend (faster than SNTP)
+                backend_client::sync_time();
+                WIFI_INIT_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+                info!("Post-WiFi init complete (SNTP + backend URL + time sync)");
+                // Immediate first poll for printer data
+                backend_client::poll_backend();
+            }
+        } else if loop_count % 400 == 0 {
+            // Regular polling every 2 seconds
+            backend_client::poll_backend();
         }
 
         // Poll NFC every 20 iterations (~100ms at 5ms delay)

@@ -1,5 +1,6 @@
 import json
 import ssl
+import time
 import logging
 import asyncio
 from typing import Optional, Callable, Any
@@ -41,6 +42,9 @@ class PrinterConnection:
     _kprofiles: list = field(default_factory=list, repr=False)  # List of calibration profiles (updated on broadcast)
     _pending_kprofile_response: Optional[asyncio.Event] = field(default=None, repr=False)
     _expected_kprofile_nozzle: Optional[str] = field(default=None, repr=False)
+    _kprofile_lock: Optional[asyncio.Lock] = field(default=None, repr=False)  # Lock to prevent concurrent requests
+    _kprofile_cache: dict = field(default_factory=dict, repr=False)  # nozzle_diameter -> (profiles, timestamp)
+    _kprofile_cache_ttl: float = field(default=30.0, repr=False)  # Cache TTL in seconds
 
     @property
     def connected(self) -> bool:
@@ -230,6 +234,8 @@ class PrinterConnection:
         """Request K-profiles from printer with retry logic.
 
         Bambu printers sometimes ignore the first request, so we retry.
+        Uses a lock to prevent concurrent requests from interfering.
+        Results are cached for 30 seconds to avoid hammering the printer.
 
         Args:
             nozzle_diameter: Filter by nozzle diameter (e.g., "0.4")
@@ -243,35 +249,60 @@ class PrinterConnection:
             logger.warning(f"[{self.serial}] Cannot get K-profiles: not connected")
             return []
 
-        for attempt in range(max_retries):
-            try:
-                # Create event for waiting
-                self._pending_kprofile_response = asyncio.Event()
-                self._expected_kprofile_nozzle = nozzle_diameter
-                self._kprofiles = []  # Clear previous profiles
+        # Check cache first
+        cached = self._kprofile_cache.get(nozzle_diameter)
+        if cached:
+            profiles, timestamp = cached
+            if time.time() - timestamp < self._kprofile_cache_ttl:
+                logger.debug(f"[{self.serial}] Returning cached K-profiles for nozzle {nozzle_diameter}")
+                return profiles
 
-                # Send the request
-                self._fetch_calibrations(nozzle_diameter)
+        # Initialize lock lazily (must be done in async context)
+        if self._kprofile_lock is None:
+            self._kprofile_lock = asyncio.Lock()
 
-                # Wait for response with timeout
+        # Use lock to prevent concurrent requests
+        async with self._kprofile_lock:
+            # Check cache again (another request may have populated it while we waited)
+            cached = self._kprofile_cache.get(nozzle_diameter)
+            if cached:
+                profiles, timestamp = cached
+                if time.time() - timestamp < self._kprofile_cache_ttl:
+                    logger.debug(f"[{self.serial}] Returning cached K-profiles (post-lock)")
+                    return profiles
+
+            for attempt in range(max_retries):
                 try:
-                    await asyncio.wait_for(
-                        self._pending_kprofile_response.wait(),
-                        timeout=timeout
-                    )
-                    logger.info(f"[{self.serial}] Got K-profiles response on attempt {attempt + 1}")
-                    return self._kprofiles
-                except asyncio.TimeoutError:
-                    logger.warning(f"[{self.serial}] K-profile request timeout on attempt {attempt + 1}/{max_retries}")
-                    continue
+                    # Create event for waiting
+                    self._pending_kprofile_response = asyncio.Event()
+                    self._expected_kprofile_nozzle = nozzle_diameter
+                    self._kprofiles = []  # Clear previous profiles
 
-            finally:
-                self._pending_kprofile_response = None
-                self._expected_kprofile_nozzle = None
+                    # Send the request
+                    self._fetch_calibrations(nozzle_diameter)
 
-        # If all retries failed, return whatever we have cached
-        logger.warning(f"[{self.serial}] All K-profile retries failed, returning cached: {len(self._kprofiles)} profiles")
-        return self._kprofiles
+                    # Wait for response with timeout
+                    try:
+                        await asyncio.wait_for(
+                            self._pending_kprofile_response.wait(),
+                            timeout=timeout
+                        )
+                        logger.info(f"[{self.serial}] Got K-profiles response on attempt {attempt + 1}")
+                        # Cache the result
+                        self._kprofile_cache[nozzle_diameter] = (self._kprofiles, time.time())
+                        return self._kprofiles
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[{self.serial}] K-profile request timeout on attempt {attempt + 1}/{max_retries}")
+                        continue
+
+                finally:
+                    self._pending_kprofile_response = None
+                    self._expected_kprofile_nozzle = None
+
+            # If all retries failed, cache empty result to avoid hammering printer
+            logger.warning(f"[{self.serial}] All K-profile retries failed, caching empty result")
+            self._kprofile_cache[nozzle_diameter] = ([], time.time())
+            return []
 
     def set_filament(
         self,

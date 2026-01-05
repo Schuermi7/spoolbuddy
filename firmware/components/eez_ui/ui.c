@@ -392,6 +392,9 @@ void ui_tick() {
             update_scale_ui();
         }
 
+        // Update backend status UI (main screen printer info)
+        update_backend_ui();
+
         // Update WiFi icon for CURRENT screen only (other screen objects are freed)
         WifiStatus status;
         wifi_get_status(&status);

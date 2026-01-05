@@ -8,4 +8,4 @@ size = "8MB"
 frequency = "80MHz"
 
 [monitor]
-baud = 921600
+baud = 2000000000

@@ -403,14 +403,16 @@ pub extern "C" fn wifi_disconnect() -> c_int {
     -1
 }
 
+/// Check if WiFi is connected (Rust API)
+pub fn is_connected() -> bool {
+    matches!(get_state(), WifiState::Connected { .. })
+}
+
 /// Check if WiFi is connected
 /// Returns 1 if connected, 0 otherwise
 #[no_mangle]
 pub extern "C" fn wifi_is_connected() -> c_int {
-    match get_state() {
-        WifiState::Connected { .. } => 1,
-        _ => 0,
-    }
+    if is_connected() { 1 } else { 0 }
 }
 
 /// Get the connected SSID

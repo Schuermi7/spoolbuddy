@@ -491,17 +491,18 @@ dependencies = [
 [[package]]
 name = "embedded-svc"
 version = "0.28.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7770e30ab55cfbf954c00019522490d6ce26a3334bede05a732ba61010e98e0"
+source = "git+https://github.com/esp-rs/embedded-svc.git#3819ae522d950bd1a0f9c89589ebd708427fa51a"
 dependencies = [
  "defmt 0.3.100",
  "embedded-io",
  "embedded-io-async",
  "enumset",
  "heapless",
+ "log",
  "num_enum",
  "serde",
  "strum 0.25.0",
+ "strum_macros 0.25.3",
 ]
 
 [[package]]
@@ -536,6 +537,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25b07a8dfbbbfc0064c0a6bdf9edcf966de6b1c33ce344bdeca3b41615452634"
 dependencies = [
  "enumset_derive",
+ "serde",
 ]
 
 [[package]]
@@ -769,6 +771,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
 dependencies = [
  "hash32",
+ "serde",
  "stable_deref_trait",
 ]
 
@@ -1252,12 +1255,15 @@ dependencies = [
  "embedded-graphics",
  "embedded-graphics-core",
  "embedded-hal 1.0.0",
+ "embedded-svc",
  "embuild",
  "esp-idf-hal",
  "esp-idf-svc",
  "esp-idf-sys",
  "heapless",
  "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

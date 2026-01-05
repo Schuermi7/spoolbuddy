@@ -62,6 +62,73 @@ extern int8_t wifi_get_rssi(void);
 extern int printer_discover(PrinterDiscoveryResult *results, int max_results);
 
 // =============================================================================
+// Backend Client Types and Functions (for server communication)
+// =============================================================================
+
+// Backend connection status
+typedef struct {
+    int state;              // 0=Disconnected, 1=Discovering, 2=Connected, 3=Error
+    uint8_t server_ip[4];   // Server IP address (valid when state=2)
+    uint16_t server_port;   // Server port (valid when state=2)
+    uint8_t printer_count;  // Number of printers cached
+} BackendStatus;
+
+// Printer info from backend (must match Rust PrinterInfo struct exactly)
+typedef struct {
+    char name[32];              // 32 bytes, offset 0
+    char serial[20];            // 20 bytes, offset 32
+    char gcode_state[16];       // 16 bytes, offset 52
+    char subtask_name[64];      // 64 bytes, offset 68
+    uint16_t remaining_time_min; // 2 bytes, offset 132
+    uint8_t print_progress;     // 1 byte, offset 134
+    bool connected;             // 1 byte, offset 135
+    // Total: 136 bytes
+} BackendPrinterInfo;
+
+// Backend client functions (implemented in Rust)
+extern void backend_get_status(BackendStatus *status);
+extern int backend_get_printer(int index, BackendPrinterInfo *info);
+extern int backend_set_url(const char *url);
+extern int backend_discover_server(void);
+extern int backend_is_connected(void);
+extern int backend_get_printer_count(void);
+extern int backend_has_cover(void);
+extern const uint8_t* backend_get_cover_data(uint32_t *size_out);
+
+// =============================================================================
+// AMS Data Types and Functions (implemented in Rust)
+// =============================================================================
+
+// AMS tray info from backend
+typedef struct {
+    char tray_type[16];     // Material type (e.g., "PLA", "PETG")
+    uint32_t tray_color;    // RGBA packed (0xRRGGBBAA)
+    uint8_t remain;         // 0-100 percentage
+} AmsTrayCInfo;
+
+// AMS unit info from backend
+typedef struct {
+    int id;                 // AMS unit ID (0-3 for regular, 128-135 for HT)
+    int humidity;           // -1 if not available, otherwise 0-100%
+    int16_t temperature;    // Celsius * 10, -1 if not available
+    int8_t extruder;        // -1 if not available, 0=right, 1=left
+    uint8_t tray_count;     // Number of trays (1-4)
+    AmsTrayCInfo trays[4];  // Tray data
+} AmsUnitCInfo;
+
+// AMS backend functions
+extern int backend_get_ams_count(int printer_index);
+extern int backend_get_ams_unit(int printer_index, int ams_index, AmsUnitCInfo *info);
+extern int backend_get_tray_now(int printer_index);
+extern int backend_get_tray_now_left(int printer_index);
+extern int backend_get_tray_now_right(int printer_index);
+
+// Time manager functions (implemented in Rust)
+// Returns hour in upper 8 bits, minute in lower 8 bits, or -1 if not synced
+extern int time_get_hhmm(void);
+extern int time_is_synced(void);
+
+// =============================================================================
 // Shared Global Variables (defined in ui_core.c)
 // =============================================================================
 
@@ -130,6 +197,12 @@ void update_settings_detail_title(void);
 
 void wire_scale_buttons(void);
 void update_scale_ui(void);
+
+// =============================================================================
+// Module Functions - ui_backend.c
+// =============================================================================
+
+void update_backend_ui(void);
 
 // =============================================================================
 // Module Functions - ui_core.c (wiring)

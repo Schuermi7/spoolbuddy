@@ -194,7 +194,7 @@
 #define LV_USE_FS_FATFS 0
 
 /* Image decoders */
-#define LV_USE_LODEPNG 0
+#define LV_USE_LODEPNG 1
 #define LV_USE_LIBPNG  0
 #define LV_USE_BMP     0
 #define LV_USE_SJPG    0

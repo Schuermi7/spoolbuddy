@@ -79,20 +79,8 @@ class Printer(PrinterBase):
         from_attributes = True
 
 
-class PrinterWithStatus(BaseModel):
-    """Printer with connection status."""
-    serial: str
-    name: Optional[str] = None
-    model: Optional[str] = None
-    ip_address: Optional[str] = None
-    access_code: Optional[str] = None
-    last_seen: Optional[int] = None
-    config: Optional[str] = None
-    auto_connect: bool = False
-    connected: bool = False
-
-
 # ============ AMS Models ============
+# NOTE: AMS models defined before PrinterWithStatus to avoid forward references
 
 class AmsTray(BaseModel):
     """Single AMS tray/slot."""
@@ -114,6 +102,30 @@ class AmsUnit(BaseModel):
     temperature: Optional[float] = None  # Temperature in Celsius
     extruder: Optional[int] = None  # 0 = right nozzle, 1 = left nozzle
     trays: list[AmsTray] = []
+
+
+class PrinterWithStatus(BaseModel):
+    """Printer with connection status and live state."""
+    serial: str
+    name: Optional[str] = None
+    model: Optional[str] = None
+    ip_address: Optional[str] = None
+    access_code: Optional[str] = None
+    last_seen: Optional[int] = None
+    config: Optional[str] = None
+    auto_connect: bool = False
+    connected: bool = False
+    # Live state from MQTT
+    gcode_state: Optional[str] = None
+    print_progress: Optional[int] = None
+    subtask_name: Optional[str] = None  # Current print job name
+    mc_remaining_time: Optional[int] = None  # Remaining time in minutes
+    cover_url: Optional[str] = None  # URL to cover image if printing
+    # AMS state
+    ams_units: list[AmsUnit] = []
+    tray_now: Optional[int] = None  # Active tray (single nozzle)
+    tray_now_left: Optional[int] = None  # Active tray left nozzle (dual)
+    tray_now_right: Optional[int] = None  # Active tray right nozzle (dual)
 
 
 class PrinterState(BaseModel):

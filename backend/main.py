@@ -1,10 +1,13 @@
 import asyncio
 import json
+import socket
 import logging
 from contextlib import asynccontextmanager
 from typing import Set, Optional, Dict
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from zeroconf.asyncio import AsyncZeroconf
+from zeroconf import ServiceInfo
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -31,6 +34,22 @@ websocket_clients: Set[WebSocket] = set()
 usage_tracker = UsageTracker()
 # Track previous printer states for comparison
 _previous_states: Dict[str, PrinterState] = {}
+# mDNS service for device discovery
+_zeroconf: Optional[AsyncZeroconf] = None
+_mdns_service: Optional[ServiceInfo] = None
+
+
+def _get_local_ip() -> str:
+    """Get the local IP address of this machine."""
+    try:
+        # Create a socket to determine the local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 async def broadcast_message(message: dict):
@@ -192,6 +211,8 @@ async def auto_connect_printers():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    global _zeroconf, _mdns_service
+
     # Startup
     logger.info("Starting SpoolBuddy server...")
 
@@ -209,6 +230,23 @@ async def lifespan(app: FastAPI):
     printer_manager.set_connect_callback(on_printer_connect)
     printer_manager.set_disconnect_callback(on_printer_disconnect)
 
+    # Register mDNS service for device discovery
+    # Service type must be <= 15 chars, using "_spbuddy-srv" (12 chars)
+    try:
+        local_ip = _get_local_ip()
+        _zeroconf = AsyncZeroconf()
+        _mdns_service = ServiceInfo(
+            "_spbuddy-srv._tcp.local.",
+            "SpoolBuddy._spbuddy-srv._tcp.local.",
+            addresses=[socket.inet_aton(local_ip)],
+            port=settings.port,
+            properties={"version": "0.1.0", "api": "/api"},
+        )
+        await _zeroconf.async_register_service(_mdns_service)
+        logger.info(f"mDNS service registered: {local_ip}:{settings.port} (_spbuddy-srv._tcp)")
+    except Exception as e:
+        logger.warning(f"Failed to register mDNS service: {e}")
+
     # Auto-connect printers
     asyncio.create_task(auto_connect_printers())
 
@@ -216,6 +254,16 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down...")
+
+    # Unregister mDNS service
+    if _zeroconf and _mdns_service:
+        try:
+            await _zeroconf.async_unregister_service(_mdns_service)
+            await _zeroconf.async_close()
+            logger.info("mDNS service unregistered")
+        except Exception as e:
+            logger.warning(f"Failed to unregister mDNS service: {e}")
+
     await printer_manager.disconnect_all()
 
 
@@ -247,6 +295,19 @@ app.include_router(device_router, prefix="/api")
 app.include_router(serial_router, prefix="/api")
 app.include_router(discovery_router, prefix="/api")
 app.include_router(catalog_router, prefix="/api")
+
+
+@app.get("/api/time")
+async def get_server_time():
+    """Get server time for ESP32 clock sync."""
+    import datetime
+    now = datetime.datetime.now()
+    return {
+        "hour": now.hour,
+        "minute": now.minute,
+        "second": now.second,
+        "timestamp": int(now.timestamp())
+    }
 
 
 async def handle_tag_detected(websocket: WebSocket, message: dict):

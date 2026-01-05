@@ -1,0 +1,873 @@
+//! Backend Client with C-callable interface
+//!
+//! Provides HTTP polling to the SpoolBuddy backend server for printer status.
+//! Uses mDNS to discover the server automatically.
+
+use esp_idf_svc::http::client::{Configuration as HttpConfig, EspHttpConnection};
+use log::{info, warn};
+use serde::Deserialize;
+use std::ffi::{c_char, c_int};
+use std::sync::Mutex;
+use embedded_svc::http::client::Client as HttpClient;
+
+/// Maximum number of printers to cache
+const MAX_PRINTERS: usize = 8;
+
+/// HTTP timeout in milliseconds
+const HTTP_TIMEOUT_MS: u64 = 5000;
+
+/// Backend connection state
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackendState {
+    Disconnected,
+    Discovering,
+    Connected { ip: [u8; 4], port: u16 },
+    Error(String),
+}
+
+/// AMS tray from backend API
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ApiAmsTray {
+    ams_id: i32,
+    tray_id: i32,
+    tray_type: Option<String>,
+    tray_color: Option<String>,  // RGBA hex (e.g., "FF0000FF")
+    remain: Option<u8>,          // 0-100 percentage
+}
+
+/// AMS unit from backend API
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ApiAmsUnit {
+    id: i32,
+    humidity: Option<i32>,
+    temperature: Option<f32>,
+    extruder: Option<i32>,  // 0=right, 1=left
+    trays: Vec<ApiAmsTray>,
+}
+
+/// Printer status from backend API
+#[derive(Debug, Clone, Deserialize)]
+struct ApiPrinter {
+    serial: String,
+    name: Option<String>,
+    connected: bool,
+    gcode_state: Option<String>,
+    print_progress: Option<u8>,
+    subtask_name: Option<String>,
+    mc_remaining_time: Option<u16>,
+    cover_url: Option<String>,
+    #[serde(default)]
+    ams_units: Vec<ApiAmsUnit>,
+    tray_now: Option<i32>,
+    tray_now_left: Option<i32>,
+    tray_now_right: Option<i32>,
+}
+
+/// Time response from backend API
+#[derive(Debug, Clone, Deserialize)]
+struct ApiTime {
+    hour: u8,
+    minute: u8,
+}
+
+/// Cached AMS tray info
+#[derive(Debug, Clone, Copy, Default)]
+struct CachedAmsTray {
+    tray_type: [u8; 16],    // Material type
+    tray_color: u32,        // RGBA packed (0xRRGGBBAA)
+    remain: u8,             // 0-100 percentage
+}
+
+/// Cached AMS unit info
+#[derive(Debug, Clone, Copy)]
+struct CachedAmsUnit {
+    id: i32,
+    humidity: i32,          // -1 if not available
+    temperature: i16,       // Celsius * 10, -1 if not available
+    extruder: i8,           // -1 if not available, 0=right, 1=left
+    tray_count: u8,
+    trays: [CachedAmsTray; 4],
+}
+
+impl Default for CachedAmsUnit {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            humidity: -1,
+            temperature: -1,
+            extruder: -1,
+            tray_count: 0,
+            trays: [CachedAmsTray::default(); 4],
+        }
+    }
+}
+
+/// Cached printer info (internal)
+#[derive(Debug, Clone)]
+struct CachedPrinter {
+    name: [u8; 32],
+    serial: [u8; 20],
+    connected: bool,
+    gcode_state: [u8; 16],
+    print_progress: u8,
+    subtask_name: [u8; 64],
+    remaining_time_min: u16,
+    // AMS data
+    ams_unit_count: u8,
+    ams_units: [CachedAmsUnit; 8],  // Max 8 AMS units
+    tray_now: i32,          // -1 if not available
+    tray_now_left: i32,     // -1 if not available
+    tray_now_right: i32,    // -1 if not available
+}
+
+impl Default for CachedPrinter {
+    fn default() -> Self {
+        Self {
+            name: [0; 32],
+            serial: [0; 20],
+            connected: false,
+            gcode_state: [0; 16],
+            print_progress: 0,
+            subtask_name: [0; 64],
+            remaining_time_min: 0,
+            ams_unit_count: 0,
+            ams_units: [CachedAmsUnit::default(); 8],
+            tray_now: -1,
+            tray_now_left: -1,
+            tray_now_right: -1,
+        }
+    }
+}
+
+/// Backend manager state
+struct BackendManager {
+    state: BackendState,
+    server_url: String,
+    printers: [CachedPrinter; MAX_PRINTERS],
+    printer_count: usize,
+}
+
+const EMPTY_AMS_TRAY: CachedAmsTray = CachedAmsTray {
+    tray_type: [0; 16],
+    tray_color: 0,
+    remain: 0,
+};
+
+const EMPTY_AMS_UNIT: CachedAmsUnit = CachedAmsUnit {
+    id: 0,
+    humidity: -1,
+    temperature: -1,
+    extruder: -1,
+    tray_count: 0,
+    trays: [EMPTY_AMS_TRAY; 4],
+};
+
+const EMPTY_PRINTER: CachedPrinter = CachedPrinter {
+    name: [0; 32],
+    serial: [0; 20],
+    connected: false,
+    gcode_state: [0; 16],
+    print_progress: 0,
+    subtask_name: [0; 64],
+    remaining_time_min: 0,
+    ams_unit_count: 0,
+    ams_units: [EMPTY_AMS_UNIT; 8],
+    tray_now: -1,
+    tray_now_left: -1,
+    tray_now_right: -1,
+};
+
+impl BackendManager {
+    const fn new() -> Self {
+        Self {
+            state: BackendState::Disconnected,
+            server_url: String::new(),
+            printers: [EMPTY_PRINTER; MAX_PRINTERS],
+            printer_count: 0,
+        }
+    }
+}
+
+// Global backend manager
+static BACKEND_MANAGER: Mutex<BackendManager> = Mutex::new(BackendManager::new());
+
+// Cover image storage (max 64KB for thumbnail)
+const MAX_COVER_SIZE: usize = 65536;
+static COVER_DATA: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+static COVER_VALID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LAST_COVER_URL: Mutex<String> = Mutex::new(String::new());
+
+/// Initialize the backend client
+pub fn init() {
+    info!("Backend client initialized");
+}
+
+/// Set the backend server URL manually
+pub fn set_server_url(url: &str) {
+    let mut manager = BACKEND_MANAGER.lock().unwrap();
+    manager.server_url = url.to_string();
+
+    // Parse IP from URL for status
+    if let Some(ip_str) = url.strip_prefix("http://") {
+        if let Some(ip_port) = ip_str.split('/').next() {
+            if let Some(ip_only) = ip_port.split(':').next() {
+                if let Ok(ip) = ip_only.parse::<std::net::Ipv4Addr>() {
+                    let octets = ip.octets();
+                    let port = ip_port.split(':').nth(1)
+                        .and_then(|p| p.parse().ok())
+                        .unwrap_or(3000);
+                    manager.state = BackendState::Connected { ip: octets, port };
+                    info!("Backend server set to: {}", url);
+                    return;
+                }
+            }
+        }
+    }
+
+    manager.state = BackendState::Disconnected;
+    warn!("Failed to parse server URL: {}", url);
+}
+
+/// Poll the backend server for printer status and time
+/// Called from main loop every ~2 seconds
+pub fn poll_backend() {
+    let manager = BACKEND_MANAGER.lock().unwrap();
+
+    // Check if we have a server URL
+    if manager.server_url.is_empty() {
+        return;
+    }
+
+    let base_url = manager.server_url.clone();
+    drop(manager); // Release lock before HTTP calls
+
+    // Fetch printers
+    let printers_url = format!("{}/api/printers", base_url);
+    let mut cover_url_to_fetch: Option<String> = None;
+
+    match fetch_printers(&printers_url) {
+        Ok(printers) => {
+            // Check if cover URL changed before updating cache
+            cover_url_to_fetch = check_cover_url_changed(&printers, &base_url);
+
+            let mut manager = BACKEND_MANAGER.lock().unwrap();
+            update_printer_cache(&mut manager, &printers);
+        }
+        Err(e) => {
+            warn!("Failed to fetch printers: {}", e);
+        }
+    }
+
+    // Fetch cover image if URL changed (outside of lock)
+    if let Some(url) = cover_url_to_fetch {
+        fetch_cover_image(&url);
+    }
+
+    // Fetch time from backend
+    fetch_and_set_time(&base_url);
+}
+
+/// Fetch time from backend and update time manager
+/// Can be called independently for quick time sync
+pub fn fetch_and_set_time(base_url: &str) {
+    let time_url = format!("{}/api/time", base_url);
+    match fetch_time(&time_url) {
+        Ok(time) => {
+            crate::time_manager::set_backend_time(time.hour, time.minute);
+        }
+        Err(_) => {
+            // Silently ignore time fetch errors
+        }
+    }
+}
+
+/// Quick time sync - call after setting server URL
+pub fn sync_time() {
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    if manager.server_url.is_empty() {
+        return;
+    }
+    let base_url = manager.server_url.clone();
+    drop(manager);
+    fetch_and_set_time(&base_url);
+}
+
+/// Fetch printers from backend API
+fn fetch_printers(url: &str) -> Result<Vec<ApiPrinter>, String> {
+    // Create HTTP client
+    let config = HttpConfig {
+        timeout: Some(std::time::Duration::from_millis(HTTP_TIMEOUT_MS)),
+        ..Default::default()
+    };
+
+    let connection = EspHttpConnection::new(&config)
+        .map_err(|e| format!("HTTP connection failed: {:?}", e))?;
+
+    let mut client = HttpClient::wrap(connection);
+
+    // Make GET request
+    let request = client.get(url)
+        .map_err(|e| format!("GET request failed: {:?}", e))?;
+
+    let mut response = request.submit()
+        .map_err(|e| format!("Request submit failed: {:?}", e))?;
+
+    // Check status
+    let status = response.status();
+    if status != 200 {
+        return Err(format!("HTTP error: {}", status));
+    }
+
+    // Read response body
+    let mut body = Vec::new();
+    let mut buf = [0u8; 512];
+    loop {
+        match response.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => body.extend_from_slice(&buf[..n]),
+            Err(e) => return Err(format!("Read error: {:?}", e)),
+        }
+    }
+
+    // Parse JSON
+    let printers: Vec<ApiPrinter> = serde_json::from_slice(&body)
+        .map_err(|e| format!("JSON parse error: {:?}", e))?;
+
+    Ok(printers)
+}
+
+/// Fetch time from backend API
+fn fetch_time(url: &str) -> Result<ApiTime, String> {
+    let config = HttpConfig {
+        timeout: Some(std::time::Duration::from_millis(2000)), // Short timeout for time
+        ..Default::default()
+    };
+
+    let connection = EspHttpConnection::new(&config)
+        .map_err(|e| format!("HTTP connection failed: {:?}", e))?;
+
+    let mut client = HttpClient::wrap(connection);
+
+    let request = client.get(url)
+        .map_err(|e| format!("GET request failed: {:?}", e))?;
+
+    let mut response = request.submit()
+        .map_err(|e| format!("Request submit failed: {:?}", e))?;
+
+    let status = response.status();
+    if status != 200 {
+        return Err(format!("HTTP error: {}", status));
+    }
+
+    let mut body = Vec::new();
+    let mut buf = [0u8; 128];
+    loop {
+        match response.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => body.extend_from_slice(&buf[..n]),
+            Err(e) => return Err(format!("Read error: {:?}", e)),
+        }
+    }
+
+    let time: ApiTime = serde_json::from_slice(&body)
+        .map_err(|e| format!("JSON parse error: {:?}", e))?;
+
+    Ok(time)
+}
+
+/// Update the cached printer data
+/// Parse RGBA hex string to u32 (e.g., "FF0000FF" -> 0xFF0000FF)
+fn parse_rgba_color(color: &str) -> u32 {
+    u32::from_str_radix(color, 16).unwrap_or(0)
+}
+
+fn update_printer_cache(manager: &mut BackendManager, printers: &[ApiPrinter]) {
+    manager.printer_count = printers.len().min(MAX_PRINTERS);
+
+    for (i, printer) in printers.iter().take(MAX_PRINTERS).enumerate() {
+        let cached = &mut manager.printers[i];
+
+        // Copy name
+        cached.name = [0; 32];
+        if let Some(ref name) = printer.name {
+            let bytes = name.as_bytes();
+            let len = bytes.len().min(31);
+            cached.name[..len].copy_from_slice(&bytes[..len]);
+        }
+
+        // Copy serial
+        cached.serial = [0; 20];
+        let serial_bytes = printer.serial.as_bytes();
+        let serial_len = serial_bytes.len().min(19);
+        cached.serial[..serial_len].copy_from_slice(&serial_bytes[..serial_len]);
+
+        // Copy state
+        cached.connected = printer.connected;
+        cached.gcode_state = [0; 16];
+        cached.print_progress = 0;
+        cached.subtask_name = [0; 64];
+        cached.remaining_time_min = 0;
+
+        if let Some(ref gcode) = printer.gcode_state {
+            let bytes = gcode.as_bytes();
+            let len = bytes.len().min(15);
+            cached.gcode_state[..len].copy_from_slice(&bytes[..len]);
+        }
+        if let Some(progress) = printer.print_progress {
+            cached.print_progress = progress;
+        }
+        if let Some(ref subtask) = printer.subtask_name {
+            let bytes = subtask.as_bytes();
+            let len = bytes.len().min(63);
+            cached.subtask_name[..len].copy_from_slice(&bytes[..len]);
+        }
+        if let Some(time) = printer.mc_remaining_time {
+            cached.remaining_time_min = time;
+        }
+
+        // Copy active tray info
+        cached.tray_now = printer.tray_now.unwrap_or(-1);
+        cached.tray_now_left = printer.tray_now_left.unwrap_or(-1);
+        cached.tray_now_right = printer.tray_now_right.unwrap_or(-1);
+
+        // Copy AMS units
+        cached.ams_unit_count = printer.ams_units.len().min(8) as u8;
+        cached.ams_units = [EMPTY_AMS_UNIT; 8];
+
+        for (j, ams) in printer.ams_units.iter().take(8).enumerate() {
+            let cached_ams = &mut cached.ams_units[j];
+            cached_ams.id = ams.id;
+            cached_ams.humidity = ams.humidity.unwrap_or(-1);
+            cached_ams.temperature = ams.temperature.map(|t| (t * 10.0) as i16).unwrap_or(-1);
+            cached_ams.extruder = ams.extruder.map(|e| e as i8).unwrap_or(-1);
+            cached_ams.tray_count = ams.trays.len().min(4) as u8;
+
+            for (k, tray) in ams.trays.iter().take(4).enumerate() {
+                let cached_tray = &mut cached_ams.trays[k];
+
+                // Copy tray type
+                cached_tray.tray_type = [0; 16];
+                if let Some(ref tray_type) = tray.tray_type {
+                    let bytes = tray_type.as_bytes();
+                    let len = bytes.len().min(15);
+                    cached_tray.tray_type[..len].copy_from_slice(&bytes[..len]);
+                }
+
+                // Parse color
+                cached_tray.tray_color = tray.tray_color
+                    .as_ref()
+                    .map(|c| parse_rgba_color(c))
+                    .unwrap_or(0);
+
+                // Remaining percentage
+                cached_tray.remain = tray.remain.unwrap_or(0);
+            }
+        }
+    }
+
+}
+
+/// Check if cover URL changed and return the new URL if so
+fn check_cover_url_changed(printers: &[ApiPrinter], base_url: &str) -> Option<String> {
+    if let Some(printer) = printers.first() {
+        if let Some(ref cover_url) = printer.cover_url {
+            let mut last_url = LAST_COVER_URL.lock().unwrap();
+            if *last_url != *cover_url {
+                // Cover URL changed
+                *last_url = cover_url.clone();
+                return Some(format!("{}{}", base_url, cover_url));
+            }
+        } else {
+            // No cover URL, invalidate cover
+            COVER_VALID.store(false, std::sync::atomic::Ordering::Relaxed);
+            let mut last_url = LAST_COVER_URL.lock().unwrap();
+            last_url.clear();
+        }
+    }
+    None
+}
+
+/// Fetch cover image from URL
+fn fetch_cover_image(url: &str) {
+    info!("Fetching cover image from: {}", url);
+
+    let config = HttpConfig {
+        timeout: Some(std::time::Duration::from_millis(10000)), // 10s timeout for image
+        ..Default::default()
+    };
+
+    let connection = match EspHttpConnection::new(&config) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Cover fetch connection failed: {:?}", e);
+            COVER_VALID.store(false, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let mut client = HttpClient::wrap(connection);
+
+    let request = match client.get(url) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Cover fetch request failed: {:?}", e);
+            COVER_VALID.store(false, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let mut response = match request.submit() {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Cover fetch submit failed: {:?}", e);
+            COVER_VALID.store(false, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+    };
+
+    if response.status() != 200 {
+        warn!("Cover fetch HTTP error: {}", response.status());
+        COVER_VALID.store(false, std::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+
+    // Read image data
+    let mut data = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        match response.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if data.len() + n > MAX_COVER_SIZE {
+                    warn!("Cover image too large, truncating");
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+            }
+            Err(e) => {
+                warn!("Cover read error: {:?}", e);
+                COVER_VALID.store(false, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+        }
+    }
+
+    info!("Downloaded cover image: {} bytes", data.len());
+
+    // Store cover data
+    let mut cover = COVER_DATA.lock().unwrap();
+    *cover = data;
+    COVER_VALID.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+// ============================================================================
+// C-callable interface
+// ============================================================================
+
+/// Backend status for C interface
+#[repr(C)]
+pub struct BackendStatus {
+    /// 0=Disconnected, 1=Discovering, 2=Connected, 3=Error
+    pub state: c_int,
+    /// Server IP address (valid when state=2)
+    pub server_ip: [u8; 4],
+    /// Server port (valid when state=2)
+    pub server_port: u16,
+    /// Number of printers cached
+    pub printer_count: u8,
+}
+
+/// Printer info for C interface
+#[repr(C)]
+pub struct PrinterInfo {
+    pub name: [c_char; 32],          // 32 bytes, offset 0
+    pub serial: [c_char; 20],         // 20 bytes, offset 32
+    pub gcode_state: [c_char; 16],    // 16 bytes, offset 52
+    pub subtask_name: [c_char; 64],   // 64 bytes, offset 68
+    pub remaining_time_min: u16,      // 2 bytes, offset 132
+    pub print_progress: u8,           // 1 byte, offset 134
+    pub connected: bool,              // 1 byte, offset 135
+    // Total: 136 bytes
+}
+
+/// Get backend connection status
+#[no_mangle]
+pub extern "C" fn backend_get_status(status: *mut BackendStatus) {
+    if status.is_null() {
+        return;
+    }
+
+    let manager = BACKEND_MANAGER.lock().unwrap();
+
+    unsafe {
+        match &manager.state {
+            BackendState::Disconnected => {
+                (*status).state = 0;
+                (*status).server_ip = [0; 4];
+                (*status).server_port = 0;
+            }
+            BackendState::Discovering => {
+                (*status).state = 1;
+                (*status).server_ip = [0; 4];
+                (*status).server_port = 0;
+            }
+            BackendState::Connected { ip, port } => {
+                (*status).state = 2;
+                (*status).server_ip = *ip;
+                (*status).server_port = *port;
+            }
+            BackendState::Error(_) => {
+                (*status).state = 3;
+                (*status).server_ip = [0; 4];
+                (*status).server_port = 0;
+            }
+        }
+        (*status).printer_count = manager.printer_count as u8;
+    }
+}
+
+/// Get printer info by index
+/// Returns 0 on success, -1 if index out of range
+#[no_mangle]
+pub extern "C" fn backend_get_printer(index: c_int, info: *mut PrinterInfo) -> c_int {
+    if info.is_null() || index < 0 {
+        return -1;
+    }
+
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    let idx = index as usize;
+
+    if idx >= manager.printer_count {
+        return -1;
+    }
+
+    let cached = &manager.printers[idx];
+
+    unsafe {
+        // Copy name (already null-terminated due to zero init)
+        for (i, &b) in cached.name.iter().enumerate() {
+            (*info).name[i] = b as c_char;
+        }
+
+        // Copy serial
+        for (i, &b) in cached.serial.iter().enumerate() {
+            (*info).serial[i] = b as c_char;
+        }
+
+        // Copy state
+        for (i, &b) in cached.gcode_state.iter().enumerate() {
+            (*info).gcode_state[i] = b as c_char;
+        }
+
+        // Copy subtask name
+        for (i, &b) in cached.subtask_name.iter().enumerate() {
+            (*info).subtask_name[i] = b as c_char;
+        }
+
+        (*info).connected = cached.connected;
+        (*info).print_progress = cached.print_progress;
+        (*info).remaining_time_min = cached.remaining_time_min;
+    }
+
+    0
+}
+
+/// Set backend server URL from C
+/// Returns 0 on success, -1 on error
+#[no_mangle]
+pub extern "C" fn backend_set_url(url: *const c_char) -> c_int {
+    if url.is_null() {
+        return -1;
+    }
+
+    let url_str = unsafe {
+        match std::ffi::CStr::from_ptr(url).to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        }
+    };
+
+    set_server_url(url_str);
+    0
+}
+
+/// Trigger mDNS discovery for backend server
+/// Returns 0 if discovery started, -1 on error
+#[no_mangle]
+pub extern "C" fn backend_discover_server() -> c_int {
+    // TODO: Implement mDNS browsing for _spoolbuddy-server._tcp
+    // For now, this is a placeholder
+    info!("Backend server discovery requested (not yet implemented)");
+
+    let mut manager = BACKEND_MANAGER.lock().unwrap();
+    manager.state = BackendState::Discovering;
+
+    0
+}
+
+/// Check if backend is connected
+/// Returns 1 if connected, 0 otherwise
+#[no_mangle]
+pub extern "C" fn backend_is_connected() -> c_int {
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    match manager.state {
+        BackendState::Connected { .. } => 1,
+        _ => 0,
+    }
+}
+
+/// Get number of cached printers
+#[no_mangle]
+pub extern "C" fn backend_get_printer_count() -> c_int {
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    manager.printer_count as c_int
+}
+
+/// Check if cover image is available
+/// Returns 1 if valid cover exists, 0 otherwise
+#[no_mangle]
+pub extern "C" fn backend_has_cover() -> c_int {
+    if COVER_VALID.load(std::sync::atomic::Ordering::Relaxed) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Get cover image data
+/// Returns pointer to PNG data, or null if not available
+/// Size is written to size_out if provided
+#[no_mangle]
+pub extern "C" fn backend_get_cover_data(size_out: *mut u32) -> *const u8 {
+    if !COVER_VALID.load(std::sync::atomic::Ordering::Relaxed) {
+        if !size_out.is_null() {
+            unsafe { *size_out = 0; }
+        }
+        return std::ptr::null();
+    }
+
+    let cover = COVER_DATA.lock().unwrap();
+    if cover.is_empty() {
+        if !size_out.is_null() {
+            unsafe { *size_out = 0; }
+        }
+        return std::ptr::null();
+    }
+
+    if !size_out.is_null() {
+        unsafe { *size_out = cover.len() as u32; }
+    }
+
+    cover.as_ptr()
+}
+
+// ============================================================================
+// AMS FFI functions
+// ============================================================================
+
+/// AMS tray info for C interface
+#[repr(C)]
+pub struct AmsTrayCInfo {
+    pub tray_type: [c_char; 16],  // Material type
+    pub tray_color: u32,          // RGBA packed
+    pub remain: u8,               // 0-100 percentage
+}
+
+/// AMS unit info for C interface
+#[repr(C)]
+pub struct AmsUnitCInfo {
+    pub id: c_int,
+    pub humidity: c_int,          // -1 if not available
+    pub temperature: i16,         // Celsius * 10, -1 if not available
+    pub extruder: i8,             // -1 if not available, 0=right, 1=left
+    pub tray_count: u8,
+    pub trays: [AmsTrayCInfo; 4],
+}
+
+/// Get number of AMS units for a printer
+#[no_mangle]
+pub extern "C" fn backend_get_ams_count(printer_index: c_int) -> c_int {
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    if printer_index < 0 || printer_index as usize >= manager.printer_count {
+        return 0;
+    }
+    manager.printers[printer_index as usize].ams_unit_count as c_int
+}
+
+/// Get AMS unit info
+/// Returns 0 on success, -1 on error
+#[no_mangle]
+pub extern "C" fn backend_get_ams_unit(
+    printer_index: c_int,
+    ams_index: c_int,
+    info: *mut AmsUnitCInfo,
+) -> c_int {
+    if info.is_null() {
+        return -1;
+    }
+
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    if printer_index < 0 || printer_index as usize >= manager.printer_count {
+        return -1;
+    }
+
+    let printer = &manager.printers[printer_index as usize];
+    if ams_index < 0 || ams_index as usize >= printer.ams_unit_count as usize {
+        return -1;
+    }
+
+    let ams = &printer.ams_units[ams_index as usize];
+
+    unsafe {
+        let out = &mut *info;
+        out.id = ams.id;
+        out.humidity = ams.humidity;
+        out.temperature = ams.temperature;
+        out.extruder = ams.extruder;
+        out.tray_count = ams.tray_count;
+
+        for (i, tray) in ams.trays.iter().enumerate() {
+            out.trays[i].tray_type = [0; 16];
+            for (j, &byte) in tray.tray_type.iter().enumerate() {
+                out.trays[i].tray_type[j] = byte as c_char;
+            }
+            out.trays[i].tray_color = tray.tray_color;
+            out.trays[i].remain = tray.remain;
+        }
+    }
+
+    0
+}
+
+/// Get active tray for single-nozzle printer
+/// Returns -1 if not available
+#[no_mangle]
+pub extern "C" fn backend_get_tray_now(printer_index: c_int) -> c_int {
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    if printer_index < 0 || printer_index as usize >= manager.printer_count {
+        return -1;
+    }
+    manager.printers[printer_index as usize].tray_now
+}
+
+/// Get active tray for left nozzle (dual-nozzle printer)
+/// Returns -1 if not available
+#[no_mangle]
+pub extern "C" fn backend_get_tray_now_left(printer_index: c_int) -> c_int {
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    if printer_index < 0 || printer_index as usize >= manager.printer_count {
+        return -1;
+    }
+    manager.printers[printer_index as usize].tray_now_left
+}
+
+/// Get active tray for right nozzle (dual-nozzle printer)
+/// Returns -1 if not available
+#[no_mangle]
+pub extern "C" fn backend_get_tray_now_right(printer_index: c_int) -> c_int {
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    if printer_index < 0 || printer_index as usize >= manager.printer_count {
+        return -1;
+    }
+    manager.printers[printer_index as usize].tray_now_right
+}
