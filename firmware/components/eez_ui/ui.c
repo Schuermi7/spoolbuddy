@@ -11,6 +11,7 @@
 
 #include "ui.h"
 #include "ui_internal.h"
+#include "ui_nfc.h"
 #include "screens.h"
 #include "images.h"
 #include "actions.h"
@@ -382,6 +383,11 @@ void ui_tick() {
         UI_LOGI("Calling update_backend_ui");
         update_backend_ui();
         UI_LOGI("update_backend_ui returned");
+
+        // Update NFC status on scan_result screen
+        if (screen_id == SCREEN_ID_SCAN_RESULT) {
+            ui_nfc_update();
+        }
 
         // Update WiFi icon for CURRENT screen only (other screen objects are freed)
         WifiStatus status;

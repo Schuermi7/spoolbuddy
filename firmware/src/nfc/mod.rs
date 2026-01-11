@@ -20,8 +20,15 @@
 #[allow(dead_code)]
 pub mod pn5180;
 
+/// I2C bridge to Pico for NFC (recommended - more reliable than direct SPI)
+pub mod i2c_bridge;
+
 // Re-exports will be used when NFC functionality is integrated
 #[allow(unused_imports)]
 pub use pn5180::{Pn5180State, Pn5180Error, Iso14443aCard, MifareKeyType, BAMBULAB_KEY};
 #[allow(unused_imports)]
 pub use pn5180::{init_stub, detect_tag_stub, rf_field_on_stub, rf_field_off_stub};
+
+// I2C bridge re-exports (used by main.rs for I2C scan)
+#[allow(unused_imports)]
+pub use i2c_bridge::{NfcBridgeState, PICO_NFC_ADDR};

@@ -315,19 +315,9 @@ static void init_backlight(void)
     esp_err_t err1b = gpio_set_level(PIN_BACKLIGHT1, 1);
     ESP_LOGI(TAG, "GPIO%d set HIGH result: %d", PIN_BACKLIGHT1, err1b);
 
-    // GPIO2 backlight
-    ESP_LOGI(TAG, "Configuring GPIO%d as output...", PIN_BACKLIGHT2);
-    gpio_config_t io_conf2 = {
-        .pin_bit_mask = (1ULL << PIN_BACKLIGHT2),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    esp_err_t err2 = gpio_config(&io_conf2);
-    ESP_LOGI(TAG, "GPIO%d config result: %d", PIN_BACKLIGHT2, err2);
-    esp_err_t err2b = gpio_set_level(PIN_BACKLIGHT2, 1);
-    ESP_LOGI(TAG, "GPIO%d set HIGH result: %d", PIN_BACKLIGHT2, err2b);
+    // GPIO2 backlight - DISABLED (GPIO2 used for NFC SPI MOSI)
+    // GPIO1 alone is sufficient for backlight control
+    ESP_LOGI(TAG, "GPIO2 skipped (reserved for NFC MOSI)");
 
     ESP_LOGI(TAG, "=== BACKLIGHT INIT DONE ===");
 }
@@ -378,31 +368,42 @@ int display_init(void)
             }
         }
 
-        // Specifically check for NAU7802 at 0x2A
-        ESP_LOGI(TAG, "Checking NAU7802 at 0x2A...");
-        uint8_t nau_reg = 0x1F;  // Revision register
-        uint8_t nau_val = 0;
-        esp_err_t nau_err = i2c_master_write_read_device(TOUCH_I2C_PORT, 0x2A, &nau_reg, 1, &nau_val, 1, 100);
-        if (nau_err == ESP_OK) {
-            ESP_LOGI(TAG, "  NAU7802 FOUND! Revision: 0x%02X", nau_val);
+        // Check for Pico NFC Bridge at 0x55
+        ESP_LOGI(TAG, "Checking Pico NFC Bridge at 0x55...");
+        uint8_t nfc_cmd = 0x01;  // CMD_GET_PRODUCT_VERSION
+        uint8_t nfc_resp[16] = {0};
+        esp_err_t nfc_err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x55, &nfc_cmd, 1, 100);
+        if (nfc_err == ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(50));  // Give Pico time to process
+            nfc_err = i2c_master_read_from_device(TOUCH_I2C_PORT, 0x55, nfc_resp, 3, 100);
+            if (nfc_err == ESP_OK && nfc_resp[0] == 0) {
+                ESP_LOGI(TAG, "  Pico NFC Bridge FOUND! PN5180 version: %d.%d", nfc_resp[1], nfc_resp[2]);
+
+                // Test tag scan
+                ESP_LOGI(TAG, "  Testing tag scan...");
+                nfc_cmd = 0x10;  // CMD_SCAN_TAG
+                nfc_err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x55, &nfc_cmd, 1, 100);
+                if (nfc_err == ESP_OK) {
+                    vTaskDelay(pdMS_TO_TICKS(200));  // Tag scan takes longer
+                    nfc_err = i2c_master_read_from_device(TOUCH_I2C_PORT, 0x55, nfc_resp, 9, 100);
+                    if (nfc_err == ESP_OK && nfc_resp[0] == 0) {
+                        ESP_LOGI(TAG, "  TAG FOUND! UID: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                            nfc_resp[1], nfc_resp[2], nfc_resp[3], nfc_resp[4],
+                            nfc_resp[5], nfc_resp[6], nfc_resp[7], nfc_resp[8]);
+                    } else {
+                        ESP_LOGI(TAG, "  No tag present (status=%d)", nfc_resp[0]);
+                    }
+                }
+            } else {
+                ESP_LOGW(TAG, "  Pico NFC Bridge read failed (err=%d, status=%d)", nfc_err, nfc_resp[0]);
+            }
         } else {
-            ESP_LOGW(TAG, "  NAU7802 NOT on GPIO15/16 bus (err=%d)", nau_err);
+            ESP_LOGW(TAG, "  Pico NFC Bridge NOT found at 0x55 (err=%d)", nfc_err);
         }
 
-        // Try 0x30 (STC8H1K28 on v1.3+)
+        // Set backlight via 0x30 (STC8H1K28)
         i2c_err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x30, &brightness, 1, 100);
-        ESP_LOGI(TAG, "I2C 0x30 write result: %d", i2c_err);
-        // Try XL9535 GPIO expander at 0x20
-        uint8_t xl9535_cfg[] = {0x06, 0x00};  // Config port 0 as output
-        uint8_t xl9535_out[] = {0x02, 0xFF};  // Set all outputs high
-        i2c_err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x20, xl9535_cfg, 2, 100);
-        ESP_LOGI(TAG, "I2C 0x20 cfg result: %d", i2c_err);
-        i2c_err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x20, xl9535_out, 2, 100);
-        ESP_LOGI(TAG, "I2C 0x20 out result: %d", i2c_err);
-        // Try 0x24
-        i2c_err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x24, &brightness, 1, 100);
-        ESP_LOGI(TAG, "I2C 0x24 write result: %d", i2c_err);
-        ESP_LOGI(TAG, "=== I2C BACKLIGHT DONE ===");
+        ESP_LOGI(TAG, "Backlight set (0x30): %s", i2c_err == ESP_OK ? "OK" : "FAIL");
     }
 
     // Initialize RGB panel

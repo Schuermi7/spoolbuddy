@@ -1,21 +1,16 @@
 //! Scale Manager with C-callable interface
 //!
 //! Provides FFI functions for the C UI code to access scale data.
+//! Uses shared I2C bus.
 
-use esp_idf_hal::i2c::I2cDriver;
 use log::info;
 use std::sync::Mutex;
 
 use crate::scale::nau7802::{self, Nau7802State};
+use crate::shared_i2c;
 
 /// Global scale state protected by mutex
-static SCALE_STATE: Mutex<Option<ScaleManager>> = Mutex::new(None);
-
-/// Scale manager holding the I2C driver and state
-struct ScaleManager {
-    i2c: I2cDriver<'static>,
-    state: Nau7802State,
-}
+static SCALE_STATE: Mutex<Option<Nau7802State>> = Mutex::new(None);
 
 /// Scale status for C code
 #[repr(C)]
@@ -28,19 +23,21 @@ pub struct ScaleStatus {
     pub cal_factor: f32,
 }
 
-/// Initialize the scale manager with an I2C driver
-pub fn init_scale_manager(i2c: I2cDriver<'static>, state: Nau7802State) {
+/// Initialize the scale manager with state (uses shared I2C)
+pub fn init_scale_manager(state: Nau7802State) {
     let mut guard = SCALE_STATE.lock().unwrap();
-    *guard = Some(ScaleManager { i2c, state });
+    *guard = Some(state);
     info!("Scale manager initialized");
 }
 
 /// Poll the scale (call from main loop)
 pub fn poll_scale() {
     let mut guard = SCALE_STATE.lock().unwrap();
-    if let Some(ref mut manager) = *guard {
-        if manager.state.initialized {
-            let _ = nau7802::read_weight(&mut manager.i2c, &mut manager.state);
+    if let Some(ref mut state) = *guard {
+        if state.initialized {
+            let _ = shared_i2c::with_i2c(|i2c| {
+                nau7802::read_weight(i2c, state)
+            });
         }
     }
 }
@@ -59,13 +56,13 @@ pub extern "C" fn scale_get_status(status: *mut ScaleStatus) {
     let guard = SCALE_STATE.lock().unwrap();
     let status = unsafe { &mut *status };
 
-    if let Some(ref manager) = *guard {
-        status.initialized = manager.state.initialized;
-        status.weight_grams = manager.state.weight_grams;
-        status.raw_value = manager.state.last_raw;
-        status.stable = manager.state.stable;
-        status.tare_offset = manager.state.calibration.zero_offset;
-        status.cal_factor = manager.state.calibration.cal_factor;
+    if let Some(ref state) = *guard {
+        status.initialized = state.initialized;
+        status.weight_grams = state.weight_grams;
+        status.raw_value = state.last_raw;
+        status.stable = state.stable;
+        status.tare_offset = state.calibration.zero_offset;
+        status.cal_factor = state.calibration.cal_factor;
     } else {
         status.initialized = false;
         status.weight_grams = 0.0;
@@ -80,8 +77,8 @@ pub extern "C" fn scale_get_status(status: *mut ScaleStatus) {
 #[no_mangle]
 pub extern "C" fn scale_get_weight() -> f32 {
     let guard = SCALE_STATE.lock().unwrap();
-    if let Some(ref manager) = *guard {
-        manager.state.weight_grams
+    if let Some(ref state) = *guard {
+        state.weight_grams
     } else {
         0.0
     }
@@ -91,8 +88,8 @@ pub extern "C" fn scale_get_weight() -> f32 {
 #[no_mangle]
 pub extern "C" fn scale_get_raw() -> i32 {
     let guard = SCALE_STATE.lock().unwrap();
-    if let Some(ref manager) = *guard {
-        manager.state.last_raw
+    if let Some(ref state) = *guard {
+        state.last_raw
     } else {
         0
     }
@@ -102,8 +99,8 @@ pub extern "C" fn scale_get_raw() -> i32 {
 #[no_mangle]
 pub extern "C" fn scale_is_initialized() -> bool {
     let guard = SCALE_STATE.lock().unwrap();
-    if let Some(ref manager) = *guard {
-        manager.state.initialized
+    if let Some(ref state) = *guard {
+        state.initialized
     } else {
         false
     }
@@ -113,8 +110,8 @@ pub extern "C" fn scale_is_initialized() -> bool {
 #[no_mangle]
 pub extern "C" fn scale_is_stable() -> bool {
     let guard = SCALE_STATE.lock().unwrap();
-    if let Some(ref manager) = *guard {
-        manager.state.stable
+    if let Some(ref state) = *guard {
+        state.stable
     } else {
         false
     }
@@ -124,10 +121,13 @@ pub extern "C" fn scale_is_stable() -> bool {
 #[no_mangle]
 pub extern "C" fn scale_tare() -> i32 {
     let mut guard = SCALE_STATE.lock().unwrap();
-    if let Some(ref mut manager) = *guard {
-        match nau7802::tare(&mut manager.i2c, &mut manager.state) {
-            Ok(()) => 0,
-            Err(_) => -1,
+    if let Some(ref mut state) = *guard {
+        let result = shared_i2c::with_i2c(|i2c| {
+            nau7802::tare(i2c, state)
+        });
+        match result {
+            Some(Ok(())) => 0,
+            _ => -1,
         }
     } else {
         -1
@@ -138,10 +138,13 @@ pub extern "C" fn scale_tare() -> i32 {
 #[no_mangle]
 pub extern "C" fn scale_calibrate(known_weight_grams: f32) -> i32 {
     let mut guard = SCALE_STATE.lock().unwrap();
-    if let Some(ref mut manager) = *guard {
-        match nau7802::calibrate(&mut manager.i2c, &mut manager.state, known_weight_grams) {
-            Ok(()) => 0,
-            Err(_) => -1,
+    if let Some(ref mut state) = *guard {
+        let result = shared_i2c::with_i2c(|i2c| {
+            nau7802::calibrate(i2c, state, known_weight_grams)
+        });
+        match result {
+            Some(Ok(())) => 0,
+            _ => -1,
         }
     } else {
         -1
@@ -152,8 +155,8 @@ pub extern "C" fn scale_calibrate(known_weight_grams: f32) -> i32 {
 #[no_mangle]
 pub extern "C" fn scale_get_tare_offset() -> i32 {
     let guard = SCALE_STATE.lock().unwrap();
-    if let Some(ref manager) = *guard {
-        manager.state.calibration.zero_offset
+    if let Some(ref state) = *guard {
+        state.calibration.zero_offset
     } else {
         0
     }

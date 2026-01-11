@@ -105,6 +105,33 @@ def pop_display_command() -> Optional[str]:
     return cmd
 
 
+async def udp_log_listener():
+    """Listen for UDP log messages from ESP32 firmware."""
+    UDP_LOG_PORT = 5555
+
+    # Create UDP socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", UDP_LOG_PORT))
+    sock.setblocking(False)
+
+    logger.info(f"UDP log listener started on port {UDP_LOG_PORT}")
+
+    loop = asyncio.get_event_loop()
+    while True:
+        try:
+            data, addr = await loop.run_in_executor(None, lambda: sock.recvfrom(4096))
+            message = data.decode('utf-8', errors='replace').strip()
+            if message:
+                # Print with ESP32 prefix for clarity
+                print(f"[ESP32] {message}")
+        except BlockingIOError:
+            await asyncio.sleep(0.01)
+        except Exception as e:
+            logger.error(f"UDP listener error: {e}")
+            await asyncio.sleep(1)
+
+
 async def check_display_timeout():
     """Background task to check for display timeout and broadcast disconnect."""
     global _display_connected
@@ -319,6 +346,9 @@ async def lifespan(app: FastAPI):
 
     # Start display timeout checker
     asyncio.create_task(check_display_timeout())
+
+    # Start UDP log listener for ESP32 logs
+    asyncio.create_task(udp_log_listener())
 
     yield
 
