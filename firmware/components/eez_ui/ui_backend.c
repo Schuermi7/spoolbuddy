@@ -25,6 +25,8 @@ static const char *TAG = "ui_backend";
 static const char *TAG = "ui_backend";
 // Variables shared with ui.c
 extern int16_t currentScreen;
+// Printers list update (from ui_printer.c)
+extern void update_printers_list(void);
 #endif
 
 // Update counter for rate limiting UI updates
@@ -55,6 +57,22 @@ static lv_obj_t *progress_pct_label = NULL;    // Percentage on progress bar
 static lv_obj_t *last_main_screen = NULL;      // Track main screen to detect recreations
 // LED animation state (must reset when main screen is recreated)
 static bool led_anim_active = false;
+
+// Custom status message (set via ui_set_status_message)
+static char custom_status_message[128] = "";
+static uint32_t custom_status_message_time = 0;
+#define CUSTOM_STATUS_MESSAGE_DURATION_MS 5000
+
+// Set a temporary status message to display on the main screen
+void ui_set_status_message(const char *message) {
+    if (message) {
+        strncpy(custom_status_message, message, sizeof(custom_status_message) - 1);
+        custom_status_message[sizeof(custom_status_message) - 1] = '\0';
+        custom_status_message_time = lv_tick_get();
+    } else {
+        custom_status_message[0] = '\0';
+    }
+}
 
 // Forward declarations
 static void update_main_screen_backend_status(BackendStatus *status);
@@ -100,8 +118,8 @@ void update_backend_ui(void) {
 
     // Rate limiting for other updates:
     // - Every 20 ticks (~100ms) when waiting for data
-    // - Every 100 ticks (~500ms) when we have data
-    int rate_limit = needs_data_refresh ? 20 : 100;
+    // - Every 40 ticks (~200ms) when we have data (fast enough for responsive status updates)
+    int rate_limit = needs_data_refresh ? 20 : 40;
     if (!force_update && ++backend_update_counter < rate_limit) {
         return;
     }
@@ -133,6 +151,11 @@ void update_backend_ui(void) {
 
     // Sync saved_printers with backend data (for settings page)
     sync_printers_from_backend();
+
+    // Update printers list UI when on settings screen (for real-time online/offline status)
+    if (screen_id == SCREEN_ID_SETTINGS_SCREEN) {
+        update_printers_list();
+    }
 
     // Update notification bell periodically (in addition to screen changes)
     update_notification_bell();
@@ -188,10 +211,14 @@ static void update_main_screen_backend_status(BackendStatus *status) {
 
         // Update first printer info
         if (backend_get_printer(selected_printer_index, &printer) == 0) {
-            // printer_label = Printer name
+            // printer_label = Printer name (only show if printer is online)
             if (objects.main_screen_printer_printer_name_label) {
-                lv_label_set_text(objects.main_screen_printer_printer_name_label,
-                    printer.name[0] ? printer.name : printer.serial);
+                if (printer.connected) {
+                    lv_label_set_text(objects.main_screen_printer_printer_name_label,
+                        printer.name[0] ? printer.name : printer.serial);
+                } else {
+                    lv_label_set_text(objects.main_screen_printer_printer_name_label, "");
+                }
             }
 
             // printer_label_1 = Status (stage name, no percentage)
@@ -309,13 +336,31 @@ static void update_main_screen_backend_status(BackendStatus *status) {
                 }
             }
         }
+    } else if (status->state == 2 && status->printer_count == 0) {
+        // Connected to backend but no printers configured
+        if (objects.main_screen_printer_printer_name_label) {
+            lv_label_set_text(objects.main_screen_printer_printer_name_label, "");
+        }
+        if (objects.main_screen_printer_printer_status) {
+            lv_label_set_text(objects.main_screen_printer_printer_status, "No Printers");
+            lv_obj_set_style_text_color(objects.main_screen_printer_printer_status,
+                lv_color_hex(0x888888), LV_PART_MAIN);
+        }
+        if (objects.main_screen_printer_filename) {
+            lv_label_set_text(objects.main_screen_printer_filename, "");
+        }
+        if (objects.main_screen_printer_time_left) {
+            lv_label_set_text(objects.main_screen_printer_time_left, "");
+        }
     } else if (status->state != 2) {
         // Not connected to backend server
         if (objects.main_screen_printer_printer_name_label) {
-            lv_label_set_text(objects.main_screen_printer_printer_name_label, "No Server");
+            lv_label_set_text(objects.main_screen_printer_printer_name_label, "");
         }
         if (objects.main_screen_printer_printer_status) {
-            lv_label_set_text(objects.main_screen_printer_printer_status, "Offline");
+            lv_label_set_text(objects.main_screen_printer_printer_status, "No Server");
+            lv_obj_set_style_text_color(objects.main_screen_printer_printer_status,
+                lv_color_hex(0x888888), LV_PART_MAIN);
         }
         if (objects.main_screen_printer_filename) {
             lv_label_set_text(objects.main_screen_printer_filename, "");
@@ -909,6 +954,30 @@ static void update_ams_display(void) {
         return;
     }
 
+    // Check if there's a connected printer that is actually online
+    BackendStatus ams_status;
+    backend_get_status(&ams_status);
+    bool has_online_printer = false;
+
+    if (ams_status.state == 2 && ams_status.printer_count > 0) {
+        // Check if the selected printer is actually online
+        BackendPrinterInfo printer_info;
+        if (backend_get_printer(selected_printer_index, &printer_info) == 0) {
+            has_online_printer = printer_info.connected;
+        }
+    }
+
+    // If no printer online, hide both AMS containers entirely
+    if (!has_online_printer) {
+        if (objects.main_screen_ams_left_nozzle) {
+            lv_obj_add_flag(objects.main_screen_ams_left_nozzle, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (objects.main_screen_ams_right_nozzle) {
+            lv_obj_add_flag(objects.main_screen_ams_right_nozzle, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
     // Setup on first call
     setup_ams_containers();
 
@@ -1063,42 +1132,45 @@ static void update_ams_display(void) {
     // Create external spool holder slots
     // Single-nozzle: one "Ext" slot on LEFT
     // Dual-nozzle: EXT-R on right, EXT-L on left
-    AmsUnitCInfo ext_info = {
-        .id = 254,  // External right (or just external for single-nozzle)
-        .humidity = -1,
-        .temperature = -1,
-        .extruder = 0,
-        .tray_count = 1,
-        .trays = {{.tray_color = 0}}  // Empty
-    };
-
-    if (!is_dual_nozzle) {
-        // Single-nozzle: create one "Ext" slot on LEFT side
-        if (objects.main_screen_ams_left_nozzle && ams_widget_count_left < MAX_AMS_WIDGETS) {
-            lv_obj_t *ext = create_ams_container(objects.main_screen_ams_left_nozzle, &ext_info, active_tray_right);
-            lv_obj_set_pos(ext, left_1slot_x, ROW_BOTTOM_Y);
-            ams_widgets_left[ams_widget_count_left++] = ext;
-        }
-    } else {
-        // Dual-nozzle: create EXT-R on right and EXT-L on left
-        if (objects.main_screen_ams_right_nozzle && ams_widget_count_right < MAX_AMS_WIDGETS) {
-            lv_obj_t *ext_r = create_ams_container(objects.main_screen_ams_right_nozzle, &ext_info, active_tray_right);
-            lv_obj_set_pos(ext_r, right_1slot_x, ROW_BOTTOM_Y);
-            ams_widgets_right[ams_widget_count_right++] = ext_r;
-        }
-
-        AmsUnitCInfo ext_l_info = {
-            .id = 255,  // External left
+    // (has_printer already checked at function start)
+    {
+        AmsUnitCInfo ext_info = {
+            .id = 254,  // External right (or just external for single-nozzle)
             .humidity = -1,
             .temperature = -1,
-            .extruder = 1,
+            .extruder = 0,
             .tray_count = 1,
             .trays = {{.tray_color = 0}}  // Empty
         };
-        if (objects.main_screen_ams_left_nozzle && ams_widget_count_left < MAX_AMS_WIDGETS) {
-            lv_obj_t *ext_l = create_ams_container(objects.main_screen_ams_left_nozzle, &ext_l_info, active_tray_left);
-            lv_obj_set_pos(ext_l, left_1slot_x, ROW_BOTTOM_Y);
-            ams_widgets_left[ams_widget_count_left++] = ext_l;
+
+        if (!is_dual_nozzle) {
+            // Single-nozzle: create one "Ext" slot on LEFT side
+            if (objects.main_screen_ams_left_nozzle && ams_widget_count_left < MAX_AMS_WIDGETS) {
+                lv_obj_t *ext = create_ams_container(objects.main_screen_ams_left_nozzle, &ext_info, active_tray_right);
+                lv_obj_set_pos(ext, left_1slot_x, ROW_BOTTOM_Y);
+                ams_widgets_left[ams_widget_count_left++] = ext;
+            }
+        } else {
+            // Dual-nozzle: create EXT-R on right and EXT-L on left
+            if (objects.main_screen_ams_right_nozzle && ams_widget_count_right < MAX_AMS_WIDGETS) {
+                lv_obj_t *ext_r = create_ams_container(objects.main_screen_ams_right_nozzle, &ext_info, active_tray_right);
+                lv_obj_set_pos(ext_r, right_1slot_x, ROW_BOTTOM_Y);
+                ams_widgets_right[ams_widget_count_right++] = ext_r;
+            }
+
+            AmsUnitCInfo ext_l_info = {
+                .id = 255,  // External left
+                .humidity = -1,
+                .temperature = -1,
+                .extruder = 1,
+                .tray_count = 1,
+                .trays = {{.tray_color = 0}}  // Empty
+            };
+            if (objects.main_screen_ams_left_nozzle && ams_widget_count_left < MAX_AMS_WIDGETS) {
+                lv_obj_t *ext_l = create_ams_container(objects.main_screen_ams_left_nozzle, &ext_l_info, active_tray_left);
+                lv_obj_set_pos(ext_l, left_1slot_x, ROW_BOTTOM_Y);
+                ams_widgets_left[ams_widget_count_left++] = ext_l;
+            }
         }
     }
 }
@@ -2410,6 +2482,12 @@ void init_main_screen_ams(void) {
     // Hide static AMS children immediately (they will be replaced with dynamic content)
     hide_all_children(objects.main_screen_ams_left_nozzle);
     hide_all_children(objects.main_screen_ams_right_nozzle);
+
+    // Hide static external slot objects (not children of nozzle containers)
+    if (objects.main_screen_ams_ext_1)
+        lv_obj_add_flag(objects.main_screen_ams_ext_1, LV_OBJ_FLAG_HIDDEN);
+    if (objects.main_screen_ext_2)
+        lv_obj_add_flag(objects.main_screen_ext_2, LV_OBJ_FLAG_HIDDEN);
 
     // Note: Do NOT set ams_static_hidden = true here!
     // We want setup_ams_containers() to still run and create the nozzle headers.

@@ -80,12 +80,18 @@ static void settings_row_click_handler(lv_event_t *e) {
 }
 
 // Wire click handlers for all child rows in a content area
+// Skips printer tab rows that have custom handlers (add_printer, printer_1)
 static void wire_content_rows(lv_obj_t *content) {
     if (!content) return;
     uint32_t child_count = lv_obj_get_child_count(content);
     for (uint32_t i = 0; i < child_count; i++) {
         lv_obj_t *child = lv_obj_get_child(content, i);
         if (child) {
+            // Skip printer tab rows - they have custom handlers in wire_printers_tab
+            if (child == objects.settings_screen_tabs_printers_content_add_printer ||
+                child == objects.settings_screen_tabs_printers_content_printer_1) {
+                continue;
+            }
             lv_obj_add_flag(child, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_remove_flag(child, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
             // Add pressed style for visual feedback

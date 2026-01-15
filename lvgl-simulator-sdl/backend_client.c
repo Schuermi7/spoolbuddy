@@ -60,6 +60,21 @@ static char g_just_added_tag_id[64] = "";
 static char g_just_added_vendor[32] = "";
 static char g_just_added_material[32] = "";
 
+// WiFi state - updated from backend poll (reflects real ESP32 device WiFi)
+static int g_wifi_state = 0;  // 0=uninitialized, 1=disconnected, 2=connecting, 3=connected, 4=error
+static char g_wifi_ssid[33] = "";
+static uint8_t g_wifi_ip[4] = {0, 0, 0, 0};
+static int8_t g_wifi_rssi = 0;
+
+// When WiFi is disconnected locally, prevent poll from overwriting for a few seconds
+static bool g_wifi_disconnected_locally = false;
+static time_t g_wifi_disconnect_time = 0;
+#define WIFI_DISCONNECT_HOLDOFF_SEC 10
+
+// Scale state - synced from backend (which gets it from real ESP32)
+static float g_scale_weight = 0.0f;
+static bool g_scale_stable = false;
+
 // Response buffer for curl
 typedef struct {
     char *data;
@@ -351,6 +366,16 @@ int backend_poll(void) {
                 strncpy(printer->name, item->valuestring, sizeof(printer->name) - 1);
             }
 
+            item = cJSON_GetObjectItem(printer_json, "ip_address");
+            if (item && item->valuestring) {
+                strncpy(printer->ip_address, item->valuestring, sizeof(printer->ip_address) - 1);
+            }
+
+            item = cJSON_GetObjectItem(printer_json, "access_code");
+            if (item && item->valuestring) {
+                strncpy(printer->access_code, item->valuestring, sizeof(printer->access_code) - 1);
+            }
+
             item = cJSON_GetObjectItem(printer_json, "connected");
             printer->connected = item ? cJSON_IsTrue(item) : false;
 
@@ -364,12 +389,73 @@ int backend_poll(void) {
 
     cJSON_Delete(json);
 
-    // Fetch device status (includes real device's tag data)
+    // Fetch device status (includes real device's tag data and WiFi)
     snprintf(url, sizeof(url), "%s/api/display/status", g_base_url);
     json = fetch_json(url);
     if (json) {
         cJSON *item = cJSON_GetObjectItem(json, "connected");
         g_state.device.display_connected = item ? cJSON_IsTrue(item) : false;
+
+        // Parse scale weight from backend (comes from ESP32 device)
+        item = cJSON_GetObjectItem(json, "weight");
+        if (item && cJSON_IsNumber(item)) {
+            g_scale_weight = (float)item->valuedouble;
+            g_state.device.last_weight = g_scale_weight;
+            printf("[backend] Scale weight from backend: %.1f g\n", g_scale_weight);
+        } else {
+            printf("[backend] No scale weight from backend (null or not a number)\n");
+        }
+        item = cJSON_GetObjectItem(json, "weight_stable");
+        if (item) {
+            g_scale_stable = cJSON_IsTrue(item);
+            g_state.device.weight_stable = g_scale_stable;
+            printf("[backend] Scale stable: %s\n", g_scale_stable ? "yes" : "no");
+        } else {
+            printf("[backend] No weight_stable field in response\n");
+        }
+
+        // Parse WiFi status from device (but respect local disconnect holdoff)
+        cJSON *wifi = cJSON_GetObjectItem(json, "wifi");
+        if (wifi) {
+            // Check holdoff - don't overwrite local disconnect state
+            bool skip_wifi_update = false;
+            if (g_wifi_disconnected_locally) {
+                time_t now = time(NULL);
+                if (difftime(now, g_wifi_disconnect_time) < WIFI_DISCONNECT_HOLDOFF_SEC) {
+                    skip_wifi_update = true;
+                } else {
+                    // Holdoff expired
+                    g_wifi_disconnected_locally = false;
+                }
+            }
+
+            if (!skip_wifi_update) {
+                item = cJSON_GetObjectItem(wifi, "state");
+                if (item && cJSON_IsNumber(item)) {
+                    g_wifi_state = item->valueint;
+                }
+                item = cJSON_GetObjectItem(wifi, "ssid");
+                if (item && cJSON_IsString(item) && item->valuestring) {
+                    strncpy(g_wifi_ssid, item->valuestring, sizeof(g_wifi_ssid) - 1);
+                    g_wifi_ssid[sizeof(g_wifi_ssid) - 1] = '\0';
+                }
+                item = cJSON_GetObjectItem(wifi, "ip");
+                if (item && cJSON_IsString(item) && item->valuestring) {
+                    // Parse IP string "192.168.1.100" into g_wifi_ip bytes
+                    int ip[4] = {0};
+                    if (sscanf(item->valuestring, "%d.%d.%d.%d", &ip[0], &ip[1], &ip[2], &ip[3]) == 4) {
+                        g_wifi_ip[0] = ip[0];
+                        g_wifi_ip[1] = ip[1];
+                        g_wifi_ip[2] = ip[2];
+                        g_wifi_ip[3] = ip[3];
+                    }
+                }
+                item = cJSON_GetObjectItem(wifi, "rssi");
+                if (item && cJSON_IsNumber(item)) {
+                    g_wifi_rssi = item->valueint;
+                }
+            }
+        }
 
         // Sync NFC state from staging system
         // Use staging_remaining to determine if tag is "present" - more stable than raw tag_data
@@ -623,6 +709,10 @@ void backend_get_status(BackendStatus *status) {
     }
 }
 
+int backend_get_printer_count(void) {
+    return g_state.printer_count;
+}
+
 int backend_get_printer(int index, BackendPrinterInfo *info) {
     if (!info || index < 0 || index >= g_state.printer_count) {
         return -1;
@@ -634,6 +724,8 @@ int backend_get_printer(int index, BackendPrinterInfo *info) {
     // Copy with size limits matching firmware struct
     strncpy(info->name, src->name, sizeof(info->name) - 1);
     strncpy(info->serial, src->serial, sizeof(info->serial) - 1);
+    strncpy(info->ip_address, src->ip_address, sizeof(info->ip_address) - 1);
+    strncpy(info->access_code, src->access_code, sizeof(info->access_code) - 1);
     strncpy(info->gcode_state, src->gcode_state, sizeof(info->gcode_state) - 1);
     strncpy(info->subtask_name, src->subtask_name, sizeof(info->subtask_name) - 1);
     strncpy(info->stg_cur_name, src->stg_cur_name, sizeof(info->stg_cur_name) - 1);
@@ -1753,7 +1845,7 @@ void nfc_clear_spool_just_added(void) {
 }
 
 // =============================================================================
-// WiFi Stubs (simulator doesn't have real WiFi)
+// WiFi Status (synced from real device via backend)
 // =============================================================================
 
 // WiFi types (matching ui_internal.h)
@@ -1769,18 +1861,21 @@ typedef struct {
     uint8_t auth_mode; // 0=Open, 1=WEP, 2=WPA, 3=WPA2, 4=WPA3
 } WifiScanResult;
 
-static int g_wifi_state = 3;  // Connected
-static char g_wifi_ssid[33] = "SimulatorWiFi";
+// WiFi state variables are defined at top of file (g_wifi_state, g_wifi_ssid, g_wifi_ip, g_wifi_rssi)
 
 void wifi_get_status(WifiStatus *status) {
     if (status) {
         status->state = g_wifi_state;
-        status->ip[0] = 192; status->ip[1] = 168; status->ip[2] = 1; status->ip[3] = 100;
-        status->rssi = -45;
+        status->ip[0] = g_wifi_ip[0];
+        status->ip[1] = g_wifi_ip[1];
+        status->ip[2] = g_wifi_ip[2];
+        status->ip[3] = g_wifi_ip[3];
+        status->rssi = g_wifi_rssi;
     }
 }
 
 int wifi_get_ssid(char *buf, int buf_len) {
+    if (!buf || buf_len <= 0) return 0;
     strncpy(buf, g_wifi_ssid, buf_len - 1);
     buf[buf_len - 1] = '\0';
     return strlen(buf);
@@ -1791,12 +1886,23 @@ int wifi_connect(const char *ssid, const char *password) {
     printf("[sim] WiFi connect: %s\n", ssid);
     strncpy(g_wifi_ssid, ssid, sizeof(g_wifi_ssid) - 1);
     g_wifi_state = 3;
+
+    // Clear disconnect holdoff since we're reconnecting
+    g_wifi_disconnected_locally = false;
     return 0;
 }
 
 int wifi_disconnect(void) {
     printf("[sim] WiFi disconnect\n");
     g_wifi_state = 1;
+    g_wifi_ssid[0] = '\0';
+    g_wifi_ip[0] = g_wifi_ip[1] = g_wifi_ip[2] = g_wifi_ip[3] = 0;
+    g_wifi_rssi = 0;
+
+    // Set holdoff to prevent poll from overwriting
+    g_wifi_disconnected_locally = true;
+    g_wifi_disconnect_time = time(NULL);
+    printf("[sim] WiFi disconnect holdoff active for %d seconds\n", WIFI_DISCONNECT_HOLDOFF_SEC);
     return 0;
 }
 
@@ -1812,6 +1918,334 @@ int wifi_scan(WifiScanResult *results, int max_results) {
     results[1].auth_mode = 0;
 
     return 2;
+}
+
+// =============================================================================
+// Printer Management API
+// =============================================================================
+
+int backend_update_printer(const char *serial, const char *name, const char *ip, const char *access_code) {
+    if (!g_curl || !serial) return -1;
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/printers/%s", g_base_url, serial);
+
+    // Build JSON payload
+    cJSON *json = cJSON_CreateObject();
+    if (name && name[0]) cJSON_AddStringToObject(json, "name", name);
+    if (ip && ip[0]) cJSON_AddStringToObject(json, "ip_address", ip);
+    if (access_code && access_code[0]) cJSON_AddStringToObject(json, "access_code", access_code);
+
+    char *json_str = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+
+    if (!json_str) return -1;
+
+    ResponseBuffer response = {0};
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_CUSTOMREQUEST, "PUT");
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, json_str);
+    curl_easy_setopt(g_curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 5L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+    curl_slist_free_all(headers);
+    free(json_str);
+
+    int result = -1;
+    if (res == CURLE_OK) {
+        long http_code;
+        curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code == 200) {
+            result = 0;
+            printf("[backend] Printer %s updated successfully\n", serial);
+        } else {
+            printf("[backend] Update printer failed: HTTP %ld\n", http_code);
+        }
+    } else {
+        printf("[backend] Update printer request failed: %s\n", curl_easy_strerror(res));
+    }
+
+    free(response.data);
+    return result;
+}
+
+int backend_delete_printer(const char *serial) {
+    if (!g_curl || !serial) return -1;
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/printers/%s", g_base_url, serial);
+
+    ResponseBuffer response = {0};
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_CUSTOMREQUEST, "DELETE");
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 5L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    int result = -1;
+    if (res == CURLE_OK) {
+        long http_code;
+        curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code == 204) {
+            result = 0;
+            printf("[backend] Printer %s deleted successfully\n", serial);
+        } else {
+            printf("[backend] Delete printer failed: HTTP %ld\n", http_code);
+        }
+    } else {
+        printf("[backend] Delete printer request failed: %s\n", curl_easy_strerror(res));
+    }
+
+    free(response.data);
+    return result;
+}
+
+int backend_add_printer(const char *serial, const char *name, const char *ip, const char *access_code) {
+    if (!g_curl || !serial || !serial[0]) return -1;
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/printers", g_base_url);
+
+    // Build JSON payload - serial is required, others optional
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "serial", serial);
+    if (name && name[0]) cJSON_AddStringToObject(json, "name", name);
+    if (ip && ip[0]) cJSON_AddStringToObject(json, "ip_address", ip);
+    if (access_code && access_code[0]) cJSON_AddStringToObject(json, "access_code", access_code);
+    cJSON_AddBoolToObject(json, "auto_connect", true);  // Auto-connect new printers by default
+
+    char *json_str = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+
+    if (!json_str) return -1;
+
+    ResponseBuffer response = {0};
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, json_str);
+    curl_easy_setopt(g_curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 5L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+    curl_slist_free_all(headers);
+    free(json_str);
+
+    int result = -1;
+    if (res == CURLE_OK) {
+        long http_code;
+        curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code == 201 || http_code == 200) {
+            result = 0;
+            printf("[backend] Printer %s added successfully\n", serial);
+        } else {
+            printf("[backend] Add printer failed: HTTP %ld\n", http_code);
+        }
+    } else {
+        printf("[backend] Add printer request failed: %s\n", curl_easy_strerror(res));
+    }
+
+    free(response.data);
+    return result;
+}
+
+int backend_connect_printer(const char *serial) {
+    if (!g_curl || !serial || !serial[0]) return -1;
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/printers/%s/connect", g_base_url, serial);
+
+    ResponseBuffer response = {0};
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, "");
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 5L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    int result = -1;
+    if (res == CURLE_OK) {
+        long http_code;
+        curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code == 204 || http_code == 200) {
+            result = 0;
+            printf("[backend] Printer %s connect initiated\n", serial);
+        } else {
+            printf("[backend] Connect printer failed: HTTP %ld\n", http_code);
+        }
+    } else {
+        printf("[backend] Connect printer request failed: %s\n", curl_easy_strerror(res));
+    }
+
+    free(response.data);
+    return result;
+}
+
+// =============================================================================
+// Printer Discovery API
+// =============================================================================
+
+// Start printer discovery (returns immediately, discovery runs in background)
+int backend_discovery_start(void) {
+    if (!g_curl) return -1;
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/discovery/start", g_base_url);
+
+    ResponseBuffer response = {0};
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, "");
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 5L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+    free(response.data);
+
+    if (res == CURLE_OK) {
+        printf("[backend] Discovery started\n");
+        return 0;
+    }
+    printf("[backend] Discovery start failed: %s\n", curl_easy_strerror(res));
+    return -1;
+}
+
+// Stop printer discovery
+int backend_discovery_stop(void) {
+    if (!g_curl) return -1;
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/discovery/stop", g_base_url);
+
+    ResponseBuffer response = {0};
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, "");
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 5L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+    free(response.data);
+
+    if (res == CURLE_OK) {
+        printf("[backend] Discovery stopped\n");
+        return 0;
+    }
+    return -1;
+}
+
+// Check if discovery is running
+int backend_discovery_is_running(void) {
+    if (!g_curl) return 0;
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/discovery/status", g_base_url);
+
+    ResponseBuffer response = {0};
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 2L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    int running = 0;
+    if (res == CURLE_OK && response.data) {
+        cJSON *json = cJSON_Parse(response.data);
+        if (json) {
+            cJSON *item = cJSON_GetObjectItem(json, "running");
+            if (item) running = cJSON_IsTrue(item);
+            cJSON_Delete(json);
+        }
+    }
+
+    free(response.data);
+    return running;
+}
+
+// Get discovered printers
+// Returns number of printers found, fills results array up to max_results
+int backend_discovery_get_printers(PrinterDiscoveryResult *results, int max_results) {
+    if (!g_curl || !results || max_results < 1) return 0;
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/discovery/printers", g_base_url);
+
+    ResponseBuffer response = {0};
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 2L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    int count = 0;
+    if (res == CURLE_OK && response.data) {
+        cJSON *json = cJSON_Parse(response.data);
+        if (json && cJSON_IsArray(json)) {
+            int arr_size = cJSON_GetArraySize(json);
+            for (int i = 0; i < arr_size && count < max_results; i++) {
+                cJSON *item = cJSON_GetArrayItem(json, i);
+                if (!item) continue;
+
+                memset(&results[count], 0, sizeof(PrinterDiscoveryResult));
+
+                cJSON *serial = cJSON_GetObjectItem(item, "serial");
+                if (serial && serial->valuestring)
+                    strncpy(results[count].serial, serial->valuestring, sizeof(results[count].serial) - 1);
+
+                cJSON *name = cJSON_GetObjectItem(item, "name");
+                if (name && name->valuestring)
+                    strncpy(results[count].name, name->valuestring, sizeof(results[count].name) - 1);
+
+                cJSON *ip = cJSON_GetObjectItem(item, "ip_address");
+                if (ip && ip->valuestring)
+                    strncpy(results[count].ip, ip->valuestring, sizeof(results[count].ip) - 1);
+
+                cJSON *model = cJSON_GetObjectItem(item, "model");
+                if (model && model->valuestring)
+                    strncpy(results[count].model, model->valuestring, sizeof(results[count].model) - 1);
+
+                count++;
+            }
+            cJSON_Delete(json);
+        }
+    }
+
+    free(response.data);
+    printf("[backend] Discovery found %d printers\n", count);
+    return count;
+}
+
+// Firmware-compatible discover function (uses backend API)
+int printer_discover(PrinterDiscoveryResult *results, int max_results) {
+    return backend_discovery_get_printers(results, max_results);
 }
 
 // =============================================================================
@@ -1833,4 +2267,60 @@ int ota_get_state(void) { return 0; }
 int ota_get_progress(void) { return 0; }
 int ota_check_for_update(void) { return 0; }
 int ota_start_update(void) { return -1; }
+
+// =============================================================================
+// Scale functions (read from backend, which gets from ESP32 device)
+// =============================================================================
+
+float backend_get_scale_weight(void) {
+    return g_scale_weight;
+}
+
+bool backend_is_scale_stable(void) {
+    return g_scale_stable;
+}
+
+// Send tare command to ESP32 via backend
+int backend_scale_tare(void) {
+    if (!g_curl) return -1;
+
+    char url[256];
+    snprintf(url, sizeof(url), "%s/api/device/scale/tare", g_base_url);
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, "");
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 5L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+    if (res == CURLE_OK) {
+        printf("[backend] Scale tare command sent\n");
+        return 0;
+    }
+    printf("[backend] Scale tare command failed: %s\n", curl_easy_strerror(res));
+    return -1;
+}
+
+// Send calibrate command to ESP32 via backend
+int backend_scale_calibrate(float known_weight_grams) {
+    if (!g_curl) return -1;
+
+    char url[256];
+    snprintf(url, sizeof(url), "%s/api/device/scale/calibrate?known_weight=%.1f", g_base_url, known_weight_grams);
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, "");
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 5L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+    if (res == CURLE_OK) {
+        printf("[backend] Scale calibrate command sent (known weight: %.1f g)\n", known_weight_grams);
+        return 0;
+    }
+    printf("[backend] Scale calibrate command failed: %s\n", curl_easy_strerror(res));
+    return -1;
+}
 

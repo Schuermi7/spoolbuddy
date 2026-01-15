@@ -23,38 +23,40 @@ extern int32_t scale_tare(void);
 extern int32_t scale_calibrate(float known_weight_grams);
 extern int32_t scale_get_tare_offset(void);
 #else
-// Simulator: Mock scale functions with controllable state
-static float mock_scale_weight = 850.0f;
-static int32_t mock_scale_raw = 85000;
-static int32_t mock_scale_tare_offset = 0;
-static bool mock_scale_initialized = true;
-static bool mock_scale_stable = true;
+// Simulator: Scale functions that read from backend (which gets from ESP32 device)
+// Forward declare backend functions to avoid header conflicts
+extern float backend_get_scale_weight(void);
+extern bool backend_is_scale_stable(void);
+extern int backend_scale_tare(void);
+extern int backend_scale_calibrate(float known_weight_grams);
 
-float scale_get_weight(void) { return mock_scale_weight; }
-int32_t scale_get_raw(void) { return mock_scale_raw; }
-bool scale_is_initialized(void) { return mock_scale_initialized; }
-bool scale_is_stable(void) { return mock_scale_stable; }
-int32_t scale_tare(void) { mock_scale_tare_offset = mock_scale_raw; return 0; }
-int32_t scale_calibrate(float known_weight_grams) { (void)known_weight_grams; return 0; }
-int32_t scale_get_tare_offset(void) { return mock_scale_tare_offset; }
-
-// Simulator control functions
-void sim_set_scale_weight(float weight) {
-    mock_scale_weight = weight;
-    mock_scale_raw = (int32_t)(weight * 100);
+float scale_get_weight(void) {
+    // Get weight from backend (which comes from real ESP32 device)
+    return backend_get_scale_weight();
 }
-
-void sim_set_scale_initialized(bool initialized) {
-    mock_scale_initialized = initialized;
+int32_t scale_get_raw(void) {
+    // Approximate raw value from backend weight
+    return (int32_t)(backend_get_scale_weight() * 100);
 }
-
-void sim_set_scale_stable(bool stable) {
-    mock_scale_stable = stable;
+bool scale_is_initialized(void) { return true; }
+bool scale_is_stable(void) { return backend_is_scale_stable(); }
+int32_t scale_tare(void) {
+    // Send tare command to ESP32 via backend
+    printf("[scale] Sending tare command to ESP32...\n");
+    return backend_scale_tare();
 }
-
-float sim_get_scale_weight(void) {
-    return mock_scale_weight;
+int32_t scale_calibrate(float known_weight_grams) {
+    // Send calibrate command to ESP32 via backend
+    printf("[scale] Sending calibrate command to ESP32 (known weight: %.1f g)...\n", known_weight_grams);
+    return backend_scale_calibrate(known_weight_grams);
 }
+int32_t scale_get_tare_offset(void) { return 0; }  // Tare offset is managed by ESP32
+
+// Simulator control functions (kept for compatibility, but now no-op)
+void sim_set_scale_weight(float weight) { (void)weight; }
+void sim_set_scale_initialized(bool initialized) { (void)initialized; }
+void sim_set_scale_stable(bool stable) { (void)stable; }
+float sim_get_scale_weight(void) { return backend_get_scale_weight(); }
 #endif
 
 // =============================================================================

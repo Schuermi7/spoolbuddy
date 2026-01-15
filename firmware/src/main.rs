@@ -47,6 +47,43 @@ const NFC_ENABLED: bool = false;
 extern "C" {
     fn display_init() -> i32;
     fn display_tick();
+    fn display_set_backlight_hw(brightness_percent: u8);
+}
+
+// =============================================================================
+// Display Settings FFI (called from C UI code)
+// =============================================================================
+
+static mut DISPLAY_BRIGHTNESS: u8 = 80;
+static mut DISPLAY_TIMEOUT: u16 = 300;
+
+#[no_mangle]
+pub extern "C" fn display_set_brightness(brightness: u8) {
+    let brightness = if brightness > 100 { 100 } else { brightness };
+    unsafe {
+        DISPLAY_BRIGHTNESS = brightness;
+        // Actually set hardware backlight via I2C
+        display_set_backlight_hw(brightness);
+    }
+    info!("Display brightness set to {}%", brightness);
+}
+
+#[no_mangle]
+pub extern "C" fn display_get_brightness() -> u8 {
+    unsafe { DISPLAY_BRIGHTNESS }
+}
+
+#[no_mangle]
+pub extern "C" fn display_set_timeout(timeout_seconds: u16) {
+    unsafe {
+        DISPLAY_TIMEOUT = timeout_seconds;
+    }
+    info!("Display timeout set to {} seconds", timeout_seconds);
+}
+
+#[no_mangle]
+pub extern "C" fn display_get_timeout() -> u16 {
+    unsafe { DISPLAY_TIMEOUT }
 }
 
 fn main() {

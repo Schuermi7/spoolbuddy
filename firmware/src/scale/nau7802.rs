@@ -290,9 +290,10 @@ pub fn read_weight(i2c: &mut I2cDriver<'_>, state: &mut Nau7802State) -> Result<
     // Apply exponential moving average filter
     state.weight_grams = state.weight_grams * (1.0 - state.filter_alpha) + weight * state.filter_alpha;
 
-    // Check stability (within 0.5g of previous reading)
+    // Check stability (within 2g of previous reading)
+    // Using 2g threshold to match realistic load cell noise levels
     let diff = (state.weight_grams - prev_weight).abs();
-    if diff < 0.5 {
+    if diff < 2.0 {
         state.stable_count = state.stable_count.saturating_add(1);
         if state.stable_count >= 5 {
             state.stable = true;

@@ -8,12 +8,13 @@
 
 #if defined(LV_LVGL_H_INCLUDE_SIMPLE)
 #include "lvgl.h"
+#elif defined(LV_LVGL_H_INCLUDE_SYSTEM)
+#include <lvgl.h>
 #elif defined(LV_BUILD_TEST)
 #include "../lvgl.h"
 #else
 #include "lvgl/lvgl.h"
 #endif
-
 
 #ifndef LV_ATTRIBUTE_MEM_ALIGN
 #define LV_ATTRIBUTE_MEM_ALIGN
@@ -131,13 +132,16 @@ uint8_t img_reset_map[] = {
 };
 
 const lv_image_dsc_t img_reset = {
-  .header.magic = LV_IMAGE_HEADER_MAGIC,
-  .header.cf = LV_COLOR_FORMAT_ARGB8888,
-  .header.flags = 0,
-  .header.w = 100,
-  .header.h = 100,
-  .header.stride = 400,
+  .header = {
+    .magic = LV_IMAGE_HEADER_MAGIC,
+    .cf = LV_COLOR_FORMAT_ARGB8888,
+    .flags = 0,
+    .w = 100,
+    .h = 100,
+    .stride = 400,
+    .reserved_2 = 0,
+  },
   .data_size = sizeof(img_reset_map),
   .data = img_reset_map,
+  .reserved = NULL,
 };
-

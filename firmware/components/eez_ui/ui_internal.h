@@ -150,6 +150,14 @@ extern int ota_check_for_update(void);
 extern int ota_start_update(void);
 
 // =============================================================================
+// Programmatic Screen IDs (beyond EEZ-generated screens)
+// =============================================================================
+
+#define SCREEN_ID_NFC_SCREEN 100
+#define SCREEN_ID_SCALE_SCREEN 101
+#define SCREEN_ID_SCALE_CALIBRATION_SCREEN 102
+
+// =============================================================================
 // Shared Global Variables (defined in ui_core.c)
 // =============================================================================
 
@@ -201,6 +209,7 @@ void wire_printers_tab(void);
 void update_printers_list(void);
 void update_printer_edit_ui(void);
 void ui_printer_cleanup(void);
+void ui_printer_add_cleanup(void);  // Cleanup printer add screen state
 void sync_printers_from_backend(void);  // Sync saved_printers with backend data
 
 // =============================================================================
@@ -219,6 +228,25 @@ void update_settings_detail_title(void);
 
 void wire_scale_buttons(void);
 void update_scale_ui(void);
+
+// =============================================================================
+// Module Functions - ui_display.c
+// =============================================================================
+
+void wire_display_buttons(void);
+void update_display_ui(void);
+
+// =============================================================================
+// Module Functions - ui_hardware.c
+// =============================================================================
+
+void create_nfc_screen(void);
+void create_scale_calibration_screen(void);
+lv_obj_t *get_nfc_screen(void);
+lv_obj_t *get_scale_calibration_screen(void);
+void update_nfc_screen(void);
+void update_scale_calibration_screen(void);
+void cleanup_hardware_screens(void);
 
 // =============================================================================
 // Module Functions - ui_backend.c

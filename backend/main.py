@@ -116,6 +116,11 @@ _device_update_available: bool = False
 # Device state (weight, tag) - updated by WebSocket messages from device
 _device_last_weight: Optional[float] = None
 _device_weight_stable: bool = False
+# Device WiFi status - reported by ESP32
+_device_wifi_ssid: Optional[str] = None
+_device_wifi_ip: Optional[str] = None
+_device_wifi_rssi: Optional[int] = None
+_device_wifi_state: int = 0  # 0=uninitialized, 1=disconnected, 2=connecting, 3=connected, 4=error
 
 # === Tag Staging System ===
 # When a tag is detected, it goes to "staging" for 30 seconds.
@@ -655,10 +660,21 @@ async def get_server_time():
 
 
 @app.get("/api/display/heartbeat")
-async def display_heartbeat(version: Optional[str] = None, update_available: Optional[bool] = None):
+async def display_heartbeat(
+    version: Optional[str] = None,
+    update_available: Optional[bool] = None,
+    # WiFi status from device
+    wifi_state: Optional[int] = None,
+    wifi_ssid: Optional[str] = None,
+    wifi_ip: Optional[str] = None,
+    wifi_rssi: Optional[int] = None,
+):
     """Heartbeat endpoint for ESP32 display to indicate it's connected."""
     global _display_firmware_version, _device_update_available
+    global _device_wifi_state, _device_wifi_ssid, _device_wifi_ip, _device_wifi_rssi
+
     update_display_heartbeat()
+
     if version:
         _display_firmware_version = version
     if update_available is not None:
@@ -674,6 +690,17 @@ async def display_heartbeat(version: Optional[str] = None, update_available: Opt
                 }))
             except RuntimeError:
                 pass
+
+    # Update WiFi status if provided
+    if wifi_state is not None:
+        _device_wifi_state = wifi_state
+    if wifi_ssid is not None:
+        _device_wifi_ssid = wifi_ssid
+    if wifi_ip is not None:
+        _device_wifi_ip = wifi_ip
+    if wifi_rssi is not None:
+        _device_wifi_rssi = wifi_rssi
+
     cmd = pop_display_command()
     if cmd:
         logger.info(f"Sending command to display: {cmd}")
@@ -699,6 +726,14 @@ async def display_status():
         "update_available": _device_update_available,
         "weight": _device_last_weight,
         "weight_stable": _device_weight_stable,
+        # WiFi status from device
+        # If device is connected but hasn't reported WiFi, assume connected (it needs WiFi to reach us)
+        "wifi": {
+            "state": _device_wifi_state if _device_wifi_state > 0 else (3 if is_display_connected() else 0),
+            "ssid": _device_wifi_ssid,
+            "ip": _device_wifi_ip,
+            "rssi": _device_wifi_rssi,
+        },
         # Staging info (new)
         "staged_tag_id": _staged_tag_id if staged else None,
         "staged_tag_data": staged,
@@ -721,9 +756,26 @@ async def update_device_state(
     tag_color_rgba: Optional[int] = None,
     tag_weight: Optional[int] = None,
     tag_type: Optional[str] = None,
+    # WiFi status from device
+    wifi_state: Optional[int] = None,
+    wifi_ssid: Optional[str] = None,
+    wifi_ip: Optional[str] = None,
+    wifi_rssi: Optional[int] = None,
 ):
     """HTTP endpoint for device to update state (alternative to WebSocket)."""
+    global _device_wifi_state, _device_wifi_ssid, _device_wifi_ip, _device_wifi_rssi
+
     update_display_heartbeat()
+
+    # Update WiFi status if provided
+    if wifi_state is not None:
+        _device_wifi_state = wifi_state
+    if wifi_ssid is not None:
+        _device_wifi_ssid = wifi_ssid
+    if wifi_ip is not None:
+        _device_wifi_ip = wifi_ip
+    if wifi_rssi is not None:
+        _device_wifi_rssi = wifi_rssi
 
     # Build tag_data if decoded data provided
     tag_data = None

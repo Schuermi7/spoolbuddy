@@ -42,6 +42,8 @@ typedef struct {
 typedef struct {
     char serial[32];
     char name[64];
+    char ip_address[20];      // IP address from backend
+    char access_code[16];     // Access code from backend
     char gcode_state[32];
     int print_progress;       // 0-100
     int layer_num;
@@ -138,17 +140,19 @@ typedef struct {
     uint8_t printer_count;  // Number of printers cached
 } BackendStatus;
 
-// Printer info (matches firmware BackendPrinterInfo exactly - 188 bytes)
+// Printer info (matches firmware BackendPrinterInfo exactly)
 typedef struct {
-    char name[32];              // 32 bytes, offset 0
-    char serial[20];            // 20 bytes, offset 32
-    char gcode_state[16];       // 16 bytes, offset 52
-    char subtask_name[64];      // 64 bytes, offset 68
-    char stg_cur_name[48];      // 48 bytes, offset 132
-    uint16_t remaining_time_min; // 2 bytes, offset 180
-    uint8_t print_progress;     // 1 byte, offset 182
-    int8_t stg_cur;             // 1 byte, offset 183
-    bool connected;             // 1 byte, offset 184
+    char name[32];              // 32 bytes
+    char serial[20];            // 20 bytes
+    char ip_address[20];        // 20 bytes - for settings sync
+    char access_code[16];       // 16 bytes - for settings sync
+    char gcode_state[16];       // 16 bytes
+    char subtask_name[64];      // 64 bytes
+    char stg_cur_name[48];      // 48 bytes - detailed stage name
+    uint16_t remaining_time_min; // 2 bytes
+    uint8_t print_progress;     // 1 byte
+    int8_t stg_cur;             // 1 byte - stage number (-1 = idle)
+    bool connected;             // 1 byte
     uint8_t _pad[3];            // 3 bytes padding
 } BackendPrinterInfo;
 
@@ -290,6 +294,25 @@ int ota_check_for_update(void);
 int ota_start_update(void);
 
 // =============================================================================
+// Scale functions (read from backend, which gets from ESP32 device)
+// =============================================================================
+
+// Get current scale weight from backend (grams)
+float backend_get_scale_weight(void);
+
+// Check if scale reading is stable
+bool backend_is_scale_stable(void);
+
+// Send tare command to ESP32 scale via backend
+// Returns 0 on success, -1 on failure
+int backend_scale_tare(void);
+
+// Send calibrate command to ESP32 scale via backend
+// known_weight_grams: the known weight currently on the scale
+// Returns 0 on success, -1 on failure
+int backend_scale_calibrate(float known_weight_grams);
+
+// =============================================================================
 // Staging functions (for NFC tag staging system)
 // =============================================================================
 
@@ -375,6 +398,50 @@ int backend_poll_assignment_completions(double since_timestamp, AssignmentComple
 bool backend_set_tray_calibration(const char *printer_serial, int ams_id, int tray_id,
                                    int cali_idx, const char *filament_id,
                                    const char *nozzle_diameter);
+
+// =============================================================================
+// Printer Management API
+// =============================================================================
+
+// Update a printer's settings
+// Returns 0 on success, -1 on failure
+int backend_update_printer(const char *serial, const char *name, const char *ip, const char *access_code);
+
+// Delete a printer from the backend
+// Returns 0 on success, -1 on failure
+int backend_delete_printer(const char *serial);
+
+// Add a new printer to the backend
+// Returns 0 on success, -1 on failure
+int backend_add_printer(const char *serial, const char *name, const char *ip, const char *access_code);
+
+// Connect to a printer (initiate MQTT connection)
+// Returns 0 on success, -1 on failure
+int backend_connect_printer(const char *serial);
+
+// =============================================================================
+// Printer Discovery API
+// =============================================================================
+
+// Printer discovery result (matches ui_internal.h definition)
+typedef struct {
+    char name[64];      // Printer name (null-terminated)
+    char serial[32];    // Serial number (null-terminated)
+    char ip[16];        // IP address as string (null-terminated)
+    char model[32];     // Model name (null-terminated)
+} PrinterDiscoveryResult;
+
+// Start printer discovery (runs in background on backend)
+int backend_discovery_start(void);
+
+// Stop printer discovery
+int backend_discovery_stop(void);
+
+// Check if discovery is running (returns 1 if running, 0 if not)
+int backend_discovery_is_running(void);
+
+// Get discovered printers (returns count, fills results array)
+int backend_discovery_get_printers(PrinterDiscoveryResult *results, int max_results);
 
 #ifdef __cplusplus
 }

@@ -156,12 +156,9 @@ static void *backend_thread(void *arg)
         pthread_mutex_lock(&backend_mutex);
         int result = backend_poll();
 
-        // Note: Simulator doesn't send tag data to backend - it only reads from staging
-        // The real ESP32 device sends tag data; simulator just displays what backend reports
-        // We still send weight for the simulated scale
-        float weight = scale_get_weight();
-        bool stable = scale_is_stable();
-        backend_send_device_state(weight, stable, NULL);  // No tag_id from simulator
+        // Note: Simulator doesn't send data to backend - it only READS from backend
+        // The real ESP32 device sends tag and weight data to backend
+        // Simulator just displays what backend reports (no own scale/NFC)
 
         pthread_mutex_unlock(&backend_mutex);
 

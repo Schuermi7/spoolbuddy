@@ -219,6 +219,35 @@ async def factory_reset_device():
     return {"success": True, "message": "Factory reset command sent"}
 
 
+@router.post("/scale/tare")
+async def scale_tare():
+    """Send tare (zero) command to scale."""
+    from main import is_display_connected, queue_display_command
+
+    if not is_display_connected():
+        raise HTTPException(status_code=400, detail="No device connected")
+
+    queue_display_command("scale_tare")
+    return {"success": True, "message": "Tare command queued"}
+
+
+@router.post("/scale/calibrate")
+async def scale_calibrate(known_weight: float):
+    """Send calibration command to scale with known weight.
+
+    Args:
+        known_weight: The known weight in grams placed on the scale
+    """
+    from main import is_display_connected, queue_display_command
+
+    if not is_display_connected():
+        raise HTTPException(status_code=400, detail="No device connected")
+
+    # Queue calibrate command with weight parameter
+    queue_display_command(f"scale_calibrate:{known_weight:.1f}")
+    return {"success": True, "message": f"Calibrate command queued (known weight: {known_weight}g)"}
+
+
 class RecoveryInfo(BaseModel):
     """USB recovery information."""
     steps: List[str]

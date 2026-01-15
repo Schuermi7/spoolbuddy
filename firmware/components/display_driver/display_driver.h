@@ -34,6 +34,12 @@ void display_tick(void);
  */
 uint32_t display_get_tick_ms(void);
 
+/**
+ * Set backlight brightness (0-100%)
+ * Uses I2C to STC8H1K28 at address 0x30
+ */
+void display_set_backlight_hw(uint8_t brightness_percent);
+
 #ifdef __cplusplus
 }
 #endif

@@ -31,6 +31,10 @@ extern enum ScreensEnum pendingScreen;
 // Static state
 static bool last_tag_present = false;
 
+// Weight display stabilization (hysteresis)
+static float last_displayed_weight = 0.0f;
+static bool weight_initialized = false;
+
 // Popup elements
 static lv_obj_t *tag_popup = NULL;
 static lv_obj_t *popup_tag_label = NULL;
@@ -252,12 +256,23 @@ void ui_nfc_card_update(void) {
     }
 
     // Always update scale status label on main screen (shows current weight)
+    // Uses 10g hysteresis to reduce visual bouncing
     if (objects.main_screen_nfc_scale_scale_label) {
         if (scale_is_initialized()) {
             float weight = scale_get_weight();
-            char weight_str[16];
-            snprintf(weight_str, sizeof(weight_str), "%.1fg", weight);
-            lv_label_set_text(objects.main_screen_nfc_scale_scale_label, weight_str);
+
+            // Apply 10g hysteresis - only update if change > 10g or first reading
+            float diff = weight - last_displayed_weight;
+            if (diff < 0) diff = -diff;  // abs
+
+            if (!weight_initialized || diff >= 10.0f) {
+                last_displayed_weight = weight;
+                weight_initialized = true;
+
+                char weight_str[16];
+                snprintf(weight_str, sizeof(weight_str), "%.0fg", weight);  // Round to whole grams
+                lv_label_set_text(objects.main_screen_nfc_scale_scale_label, weight_str);
+            }
             lv_obj_set_style_text_color(objects.main_screen_nfc_scale_scale_label,
                 lv_color_hex(0xFF00FF00), LV_PART_MAIN);
         } else {

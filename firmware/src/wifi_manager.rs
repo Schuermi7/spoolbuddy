@@ -378,7 +378,7 @@ pub extern "C" fn wifi_get_status(status: *mut WifiStatus) {
     }
 }
 
-/// Disconnect from WiFi
+/// Disconnect from WiFi and clear saved credentials
 /// Returns 0 on success, -1 on error
 #[no_mangle]
 pub extern "C" fn wifi_disconnect() -> c_int {
@@ -386,14 +386,26 @@ pub extern "C" fn wifi_disconnect() -> c_int {
 
     if let Some(manager) = manager_guard.as_mut() {
         if let Some(wifi) = manager.wifi.as_mut() {
-            match wifi.disconnect() {
+            // Stop the WiFi completely to prevent auto-reconnect
+            match wifi.stop() {
                 Ok(_) => {
                     manager.state = WifiState::Disconnected;
-                    info!("WiFi disconnected");
+                    manager.ssid.clear();
+                    manager.password.clear();
+                    info!("WiFi stopped and disconnected");
+
+                    // Clear saved credentials from NVS to prevent auto-reconnect on boot
+                    if let Some(nvs_partition) = manager.nvs.as_ref() {
+                        if let Ok(nvs) = EspNvs::new(nvs_partition.clone(), NVS_NAMESPACE, true) {
+                            let _ = nvs.remove(NVS_KEY_SSID);
+                            let _ = nvs.remove(NVS_KEY_PASSWORD);
+                            info!("WiFi credentials cleared from NVS");
+                        }
+                    }
                     return 0;
                 }
                 Err(e) => {
-                    error!("WiFi disconnect failed: {:?}", e);
+                    error!("WiFi stop failed: {:?}", e);
                     return -1;
                 }
             }

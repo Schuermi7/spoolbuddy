@@ -323,6 +323,23 @@ static void init_backlight(void)
 }
 
 /**
+ * Set backlight brightness (0-100%)
+ * Uses I2C to STC8H1K28 at address 0x30
+ * Called from Rust via FFI
+ */
+void display_set_backlight_hw(uint8_t brightness_percent)
+{
+    // Convert 0-100% to 0-255
+    uint8_t hw_brightness = (uint8_t)((brightness_percent * 255) / 100);
+
+    // Send to I2C backlight controller
+    esp_err_t err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x30, &hw_brightness, 1, 100);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Backlight I2C write failed: %d", err);
+    }
+}
+
+/**
  * LVGL tick callback
  */
 static uint32_t tick_get_cb(void)

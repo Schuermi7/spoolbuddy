@@ -270,6 +270,11 @@ pub fn poll_backend() {
     // Send heartbeat to indicate display is connected
     send_heartbeat(&base_url);
 
+    // Send current scale weight to backend (so other clients can see it)
+    let weight = crate::scale_manager::scale_get_weight();
+    let stable = crate::scale_manager::scale_is_stable();
+    send_device_state(None, weight, stable);
+
     // Fetch printers
     let printers_url = format!("{}/api/printers", base_url);
     let mut cover_url_to_fetch: Option<String> = None;
@@ -296,16 +301,69 @@ pub fn poll_backend() {
     fetch_and_set_time(&base_url);
 }
 
+/// Get WiFi status parameters for backend state updates
+/// Returns URL query string fragment like "&wifi_state=3&wifi_ssid=MyNetwork&wifi_ip=192.168.1.50&wifi_rssi=-45"
+fn get_wifi_params() -> String {
+    let mut status = crate::wifi_manager::WifiStatus {
+        state: 0,
+        ip: [0, 0, 0, 0],
+        rssi: 0,
+    };
+
+    // SAFETY: wifi_get_status is a C-callable function that fills the struct
+    unsafe {
+        crate::wifi_manager::wifi_get_status(&mut status as *mut _);
+    }
+
+    if status.state == 0 {
+        // Uninitialized - don't send WiFi params
+        return String::new();
+    }
+
+    let mut params = format!("&wifi_state={}", status.state);
+
+    // Get SSID if connected
+    if status.state == 3 {
+        let mut ssid_buf = [0u8; 33];
+        let ssid_len = unsafe {
+            crate::wifi_manager::wifi_get_ssid(ssid_buf.as_mut_ptr() as *mut c_char, 33)
+        };
+        if ssid_len > 0 {
+            // Convert buffer to string (find null terminator)
+            let ssid = ssid_buf.iter()
+                .position(|&b| b == 0)
+                .map(|end| String::from_utf8_lossy(&ssid_buf[..end]).to_string())
+                .unwrap_or_default();
+            if !ssid.is_empty() {
+                // URL encode the SSID
+                let encoded_ssid = ssid.replace(' ', "%20").replace('#', "%23");
+                params.push_str(&format!("&wifi_ssid={}", encoded_ssid));
+            }
+        }
+
+        // Add IP address
+        params.push_str(&format!("&wifi_ip={}.{}.{}.{}",
+            status.ip[0], status.ip[1], status.ip[2], status.ip[3]));
+
+        // Add RSSI
+        params.push_str(&format!("&wifi_rssi={}", status.rssi));
+    }
+
+    params
+}
+
 /// Send heartbeat to backend to indicate display is connected
 /// Also checks for pending commands (e.g., reboot)
+/// Includes WiFi status so backend always has current network info
 fn send_heartbeat(base_url: &str) {
     use esp_idf_sys::esp_restart;
 
     let version = env!("CARGO_PKG_VERSION");
     let update_available = crate::ota_manager::is_update_available();
+    let wifi_params = get_wifi_params();
     let url = format!(
-        "{}/api/display/heartbeat?version={}&update_available={}",
-        base_url, version, update_available
+        "{}/api/display/heartbeat?version={}&update_available={}{}",
+        base_url, version, update_available, wifi_params
     );
 
     let config = HttpConfig {
@@ -349,11 +407,31 @@ fn send_heartbeat(base_url: &str) {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 unsafe { esp_restart(); }
             }
+            // Check for scale tare command
+            else if body.contains("\"command\":\"scale_tare\"") || body.contains("\"command\": \"scale_tare\"") {
+                log::info!("Received scale_tare command from backend");
+                let result = crate::scale_manager::scale_tare();
+                log::info!("Scale tare result: {}", result);
+            }
+            // Check for scale calibrate command (e.g., "scale_calibrate:100.0")
+            else if body.contains("\"command\":\"scale_calibrate:") || body.contains("\"command\": \"scale_calibrate:") {
+                // Extract the weight value from command
+                if let Some(start) = body.find("scale_calibrate:") {
+                    let after_cmd = &body[start + 16..];
+                    // Find end of weight value (quote or whitespace)
+                    let end = after_cmd.find(|c: char| c == '"' || c.is_whitespace()).unwrap_or(after_cmd.len());
+                    if let Ok(known_weight) = after_cmd[..end].parse::<f32>() {
+                        log::info!("Received scale_calibrate command from backend: {}g", known_weight);
+                        let result = crate::scale_manager::scale_calibrate(known_weight);
+                        log::info!("Scale calibrate result: {}", result);
+                    }
+                }
+            }
         }
     }
 }
 
-/// Send device state to backend (weight, tag) and receive decoded tag data
+/// Send device state to backend (weight, tag, WiFi) and receive decoded tag data
 /// Returns true if tag data was received and set
 pub fn send_device_state(tag_uid_hex: Option<&str>, weight: f32, stable: bool) -> bool {
     let manager = BACKEND_MANAGER.lock().unwrap();
@@ -362,6 +440,9 @@ pub fn send_device_state(tag_uid_hex: Option<&str>, weight: f32, stable: bool) -
     }
     let base_url = manager.server_url.clone();
     drop(manager);
+
+    // Get WiFi status to include in state update
+    let wifi_params = get_wifi_params();
 
     // Build URL with query params, including decoded tag data if available
     let url = if let Some(tag_id) = tag_uid_hex {
@@ -378,7 +459,7 @@ pub fn send_device_state(tag_uid_hex: Option<&str>, weight: f32, stable: bool) -
             // Include decoded tag data (simple URL encoding - replace spaces with %20)
             let encode = |s: &str| s.replace(' ', "%20").replace('#', "%23");
             format!(
-                "{}/api/display/state?weight={:.1}&stable={}&tag_id={}&tag_vendor={}&tag_material={}&tag_subtype={}&tag_color={}&tag_color_rgba={}&tag_weight={}&tag_type={}",
+                "{}/api/display/state?weight={:.1}&stable={}&tag_id={}&tag_vendor={}&tag_material={}&tag_subtype={}&tag_color={}&tag_color_rgba={}&tag_weight={}&tag_type={}{}",
                 base_url, weight, stable, tag_id,
                 encode(&vendor),
                 encode(&material),
@@ -386,19 +467,20 @@ pub fn send_device_state(tag_uid_hex: Option<&str>, weight: f32, stable: bool) -
                 encode(&color),
                 color_rgba,
                 spool_weight,
-                encode(&tag_type)
+                encode(&tag_type),
+                wifi_params
             )
         } else {
             // Just send tag_id without decoded data
             format!(
-                "{}/api/display/state?weight={:.1}&stable={}&tag_id={}",
-                base_url, weight, stable, tag_id
+                "{}/api/display/state?weight={:.1}&stable={}&tag_id={}{}",
+                base_url, weight, stable, tag_id, wifi_params
             )
         }
     } else {
         format!(
-            "{}/api/display/state?weight={:.1}&stable={}",
-            base_url, weight, stable
+            "{}/api/display/state?weight={:.1}&stable={}{}",
+            base_url, weight, stable, wifi_params
         )
     };
 

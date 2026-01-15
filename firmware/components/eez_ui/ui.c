@@ -78,6 +78,8 @@ void ui_tick() {
 // Shared Global Variables
 // =============================================================================
 
+// Programmatic screen IDs are defined in ui_internal.h
+
 int16_t currentScreen = -1;
 enum ScreensEnum pendingScreen = 0;
 enum ScreensEnum previousScreen = SCREEN_ID_MAIN_SCREEN;
@@ -102,7 +104,8 @@ void loadScreen(enum ScreensEnum screenId) {
     lv_obj_t *screen = NULL;
 
     // Map screen IDs to screen objects
-    switch (screenId) {
+    // Cast to int to allow programmatic screen IDs (100+) without enum warning
+    switch ((int)screenId) {
         case SCREEN_ID_MAIN_SCREEN: screen = objects.main_screen; break;
         case SCREEN_ID_AMS_OVERVIEW: screen = objects.ams_overview; break;
         case SCREEN_ID_SCAN_RESULT: screen = objects.scan_result; break;
@@ -112,6 +115,8 @@ void loadScreen(enum ScreensEnum screenId) {
         case SCREEN_ID_SETTINGS_PRINTER_ADD_SCREEN: screen = objects.settings_printer_add_screen; break;
         case SCREEN_ID_SETTINGS_DISPLAY_SCREEN: screen = objects.settings_display_screen; break;
         case SCREEN_ID_SETTINGS_UPDATE_SCREEN: screen = objects.settings_update_screen; break;
+        case SCREEN_ID_NFC_SCREEN: screen = get_nfc_screen(); break;
+        case SCREEN_ID_SCALE_CALIBRATION_SCREEN: screen = get_scale_calibration_screen(); break;
         default: screen = getLvglObjectFromIndex(currentScreen); break;
     }
 
@@ -168,6 +173,10 @@ void navigate_to_settings_detail(const char *title) {
         pendingScreen = SCREEN_ID_SETTINGS_DISPLAY_SCREEN;
     } else if (strcmp(title, "Firmware Update") == 0 || strcmp(title, "Check for Updates") == 0) {
         pendingScreen = SCREEN_ID_SETTINGS_UPDATE_SCREEN;
+    } else if (strcmp(title, "NFC Reader") == 0) {
+        pendingScreen = SCREEN_ID_NFC_SCREEN;
+    } else if (strcmp(title, "Scale") == 0) {
+        pendingScreen = SCREEN_ID_SCALE_CALIBRATION_SCREEN;
     } else {
         // Fallback to main settings screen for unsupported detail pages
         pendingScreen = SCREEN_ID_SETTINGS_SCREEN;
@@ -244,6 +253,7 @@ void delete_all_screens(void) {
     ui_nfc_card_cleanup();       // Clear NFC card dynamic elements
     reset_notification_state();  // Clear notification dots before deleting screens
     reset_backend_ui_state();    // Clear all dynamic UI state (AMS widgets, labels, etc.)
+    cleanup_hardware_screens();  // Delete programmatic NFC/Scale screens
 
     lv_obj_t **screens[] = {
         &objects.main_screen,
@@ -309,60 +319,77 @@ void ui_tick() {
             }
         }
 
-        // Delete old screen and create new one
-        delete_all_screens();
+        // For programmatic screens, create and load BEFORE deleting old screens
+        // This prevents LVGL from having an invalid active screen during transition
+        if (screen == SCREEN_ID_NFC_SCREEN || screen == SCREEN_ID_SCALE_CALIBRATION_SCREEN) {
+            // Create the new programmatic screen
+            if (screen == SCREEN_ID_NFC_SCREEN) {
+                create_nfc_screen();
+            } else if (screen == SCREEN_ID_SCALE_CALIBRATION_SCREEN) {
+                create_scale_calibration_screen();
+            }
+            // Load it immediately so LVGL has a valid active screen
+            loadScreen(screen);
+            // Now delete old EEZ screens (programmatic screens are protected in cleanup)
+            delete_all_screens();
+        } else {
+            // Standard EEZ screen transition
+            delete_all_screens();
 
-        switch (screen) {
-            case SCREEN_ID_MAIN_SCREEN:
-                create_screen_main_screen();
-                wire_main_buttons();
-                ui_nfc_card_init();
-                break;
-            case SCREEN_ID_AMS_OVERVIEW:
-                create_screen_ams_overview();
-                wire_ams_overview_buttons();
-                break;
-            case SCREEN_ID_SCAN_RESULT:
-                create_screen_scan_result();
-                wire_scan_result_buttons();
-                ui_scan_result_init();
-                break;
-            case SCREEN_ID_SPOOL_DETAILS:
-                create_screen_spool_details();
-                wire_spool_details_buttons();
-                break;
-            case SCREEN_ID_SETTINGS_SCREEN:
-                create_screen_settings_screen();
-                wire_settings_buttons();
-                wire_printers_tab();
-                update_wifi_ui_state();
-                if (pending_settings_tab >= 0) {
-                    select_settings_tab(pending_settings_tab);
-                    pending_settings_tab = -1;
-                }
-                break;
-            case SCREEN_ID_SETTINGS_WIFI_SCREEN:
-                create_screen_settings_wifi_screen();
-                wire_settings_subpage_buttons(objects.settings_wifi_screen_top_bar_icon_back);
-                wire_wifi_settings_buttons();
-                break;
-            case SCREEN_ID_SETTINGS_PRINTER_ADD_SCREEN:
-                create_screen_settings_printer_add_screen();
-                wire_settings_subpage_buttons(objects.settings_printer_add_screen_top_bar_icon_back);
-                wire_printer_add_buttons();
-                break;
-            case SCREEN_ID_SETTINGS_DISPLAY_SCREEN:
-                create_screen_settings_display_screen();
-                wire_settings_subpage_buttons(objects.settings_display_screen_top_bar_icon_back);
-                break;
-            case SCREEN_ID_SETTINGS_UPDATE_SCREEN:
-                create_screen_settings_update_screen();
-                wire_settings_subpage_buttons(objects.settings_update_screen_top_bar_icon_back);
-                wire_update_buttons();
-                break;
+            switch ((int)screen) {
+                case SCREEN_ID_MAIN_SCREEN:
+                    create_screen_main_screen();
+                    wire_main_buttons();
+                    ui_nfc_card_init();
+                    break;
+                case SCREEN_ID_AMS_OVERVIEW:
+                    create_screen_ams_overview();
+                    wire_ams_overview_buttons();
+                    break;
+                case SCREEN_ID_SCAN_RESULT:
+                    create_screen_scan_result();
+                    wire_scan_result_buttons();
+                    ui_scan_result_init();
+                    break;
+                case SCREEN_ID_SPOOL_DETAILS:
+                    create_screen_spool_details();
+                    wire_spool_details_buttons();
+                    break;
+                case SCREEN_ID_SETTINGS_SCREEN:
+                    create_screen_settings_screen();
+                    wire_settings_buttons();
+                    wire_printers_tab();
+                    update_printers_list();  // Refresh printer list after returning from edit
+                    update_wifi_ui_state();
+                    if (pending_settings_tab >= 0) {
+                        select_settings_tab(pending_settings_tab);
+                        pending_settings_tab = -1;
+                    }
+                    break;
+                case SCREEN_ID_SETTINGS_WIFI_SCREEN:
+                    create_screen_settings_wifi_screen();
+                    wire_settings_subpage_buttons(objects.settings_wifi_screen_top_bar_icon_back);
+                    wire_wifi_settings_buttons();
+                    break;
+                case SCREEN_ID_SETTINGS_PRINTER_ADD_SCREEN:
+                    create_screen_settings_printer_add_screen();
+                    wire_settings_subpage_buttons(objects.settings_printer_add_screen_top_bar_icon_back);
+                    wire_printer_add_buttons();
+                    break;
+                case SCREEN_ID_SETTINGS_DISPLAY_SCREEN:
+                    create_screen_settings_display_screen();
+                    wire_settings_subpage_buttons(objects.settings_display_screen_top_bar_icon_back);
+                    wire_display_buttons();
+                    break;
+                case SCREEN_ID_SETTINGS_UPDATE_SCREEN:
+                    create_screen_settings_update_screen();
+                    wire_settings_subpage_buttons(objects.settings_update_screen_top_bar_icon_back);
+                    wire_update_buttons();
+                    break;
+            }
+
+            loadScreen(screen);
         }
-
-        loadScreen(screen);
 
         // Force immediate backend UI update for the new screen
         // This ensures clock, dropdown, etc. are populated immediately
@@ -400,13 +427,21 @@ void ui_tick() {
             ui_scan_result_update();
         }
 
+        // Update hardware detail screens
+        if (screen_id == SCREEN_ID_NFC_SCREEN) {
+            update_nfc_screen();
+        }
+        if (screen_id == SCREEN_ID_SCALE_CALIBRATION_SCREEN) {
+            update_scale_calibration_screen();
+        }
+
         // Update WiFi icon for CURRENT screen only (other screen objects are freed)
         WifiStatus status;
         wifi_get_status(&status);
 
         // Get the WiFi icon for the current screen
         lv_obj_t *wifi_icon = NULL;
-        switch (screen_id) {
+        switch ((int)screen_id) {
             case SCREEN_ID_MAIN_SCREEN:
                 wifi_icon = objects.top_bar_wifi_signal;
                 break;
@@ -469,7 +504,10 @@ void ui_tick() {
         }
     }
 
-    tick_screen(currentScreen);
+    // Only tick EEZ screens (0-8), not programmatic screens (99+)
+    if (currentScreen >= 0 && currentScreen < 9) {
+        tick_screen(currentScreen);
+    }
 }
 
 #endif
