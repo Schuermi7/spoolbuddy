@@ -61,9 +61,35 @@ export function Inventory() {
 
   // Modal state
   const [showAddModal, setShowAddModal] = useState(false);
+  const [addTagId, setAddTagId] = useState<string | null>(null); // Tag ID to pre-fill when adding
+  const [addWeight, setAddWeight] = useState<number | null>(null); // Weight to pre-fill when adding
   const [editSpool, setEditSpool] = useState<Spool | null>(null);
   const [deleteSpool, setDeleteSpool] = useState<Spool | null>(null);
   const [showColumnModal, setShowColumnModal] = useState(false);
+
+  // Handle URL query parameters (edit, add, tagId, weight)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const editId = params.get('edit');
+    const addParam = params.get('add');
+    const tagIdParam = params.get('tagId');
+    const weightParam = params.get('weight');
+
+    if (editId && spools.length > 0) {
+      const spoolToEdit = spools.find(s => s.id === editId);
+      if (spoolToEdit) {
+        setEditSpool(spoolToEdit);
+        // Clear the URL param without navigating
+        window.history.replaceState({}, '', '/inventory');
+      }
+    } else if (addParam === 'true') {
+      setAddTagId(tagIdParam); // May be null if not provided
+      setAddWeight(weightParam ? parseInt(weightParam, 10) : null);
+      setShowAddModal(true);
+      // Clear the URL param without navigating
+      window.history.replaceState({}, '', '/inventory');
+    }
+  }, [spools]);
 
   // Column configuration
   const [columnConfig, setColumnConfig] = useState<ColumnConfig[]>(loadColumnConfig);
@@ -155,6 +181,17 @@ export function Inventory() {
     saveColumnConfig(config);
   };
 
+  const handleSyncWeight = async (spool: Spool) => {
+    if (spool.weight_current === null) return;
+    try {
+      await api.setSpoolWeight(spool.id, spool.weight_current);
+      await loadSpools();
+      showToast('success', `Synced "${spool.color_name || spool.material}" to scale weight`);
+    } catch (e) {
+      showToast('error', e instanceof Error ? e.message : 'Failed to sync weight');
+    }
+  };
+
   return (
     <div class="space-y-6">
       {/* Header */}
@@ -193,6 +230,7 @@ export function Inventory() {
           spoolsInPrinters={spoolsInPrinters}
           columnConfig={columnConfig}
           onEditSpool={(spool) => setEditSpool(spool)}
+          onSyncWeight={handleSyncWeight}
           onOpenColumns={() => setShowColumnModal(true)}
         />
       )}
@@ -200,9 +238,15 @@ export function Inventory() {
       {/* Add Spool Modal */}
       <AddSpoolModal
         isOpen={showAddModal}
-        onClose={() => setShowAddModal(false)}
+        onClose={() => {
+          setShowAddModal(false);
+          setAddTagId(null);
+          setAddWeight(null);
+        }}
         onSave={handleAddSpool}
         printersWithCalibrations={printersWithCalibrations}
+        initialTagId={addTagId}
+        initialWeight={addWeight}
       />
 
       {/* Edit Spool Modal */}

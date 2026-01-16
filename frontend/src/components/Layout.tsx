@@ -2,7 +2,7 @@ import { ComponentChildren } from "preact";
 import { Link, useLocation } from "wouter-preact";
 import { useWebSocket } from "../lib/websocket";
 import { useTheme } from "../lib/theme";
-import { Sun, Moon } from "lucide-preact";
+import { Sun, Moon, Github } from "lucide-preact";
 
 interface LayoutProps {
   children: ComponentChildren;
@@ -17,7 +17,7 @@ const navItems = [
 
 export function Layout({ children }: LayoutProps) {
   const [location] = useLocation();
-  const { deviceConnected, currentWeight } = useWebSocket();
+  const { deviceConnected } = useWebSocket();
   const { theme, toggleTheme } = useTheme();
 
   return (
@@ -69,6 +69,17 @@ export function Layout({ children }: LayoutProps) {
                 )}
               </button>
 
+              {/* GitHub link */}
+              <a
+                href="https://github.com/maziggy/spoolbuddy"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="p-2 rounded-md hover:bg-[var(--bg-header-hover)] transition-colors"
+                title="View on GitHub"
+              >
+                <Github class="w-5 h-5 text-[var(--header-text-muted)]" />
+              </a>
+
               {/* Device status */}
               <div class="flex items-center space-x-2">
                 <div
@@ -81,13 +92,6 @@ export function Layout({ children }: LayoutProps) {
                   {deviceConnected ? "Connected" : "Offline"}
                 </span>
               </div>
-
-              {/* Weight display */}
-              {currentWeight !== null && (
-                <div class="bg-[var(--bg-tertiary)] px-3 py-1 rounded-md">
-                  <span class="text-sm font-mono text-[var(--header-text)]">{currentWeight.toFixed(1)}g</span>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -123,21 +127,6 @@ export function Layout({ children }: LayoutProps) {
           {children}
         </div>
       </main>
-
-      {/* Footer */}
-      <footer class="bg-[var(--bg-tertiary)] text-[var(--text-muted)] py-4 border-t border-[var(--border-color)]">
-        <div class="w-full px-4 sm:px-6 lg:px-8 text-center text-sm">
-          SpoolBuddy &bull;{" "}
-          <a
-            href="https://github.com/maziggy/spoolbuddy"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-[var(--accent-color)] hover:text-[var(--accent-hover)]"
-          >
-            GitHub
-          </a>
-        </div>
-      </footer>
     </div>
   );
 }

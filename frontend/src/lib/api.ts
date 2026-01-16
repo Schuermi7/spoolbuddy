@@ -89,6 +89,16 @@ export interface SetCalibrationRequest {
   nozzle_diameter?: string;  // Nozzle diameter (default "0.4")
 }
 
+export interface AssignSpoolRequest {
+  spool_id: string;
+}
+
+export interface AssignSpoolResponse {
+  status: "configured" | "staged";
+  message: string;
+  needs_replacement: boolean;
+}
+
 export interface CalibrationProfile {
   cali_idx: number;
   filament_id: string;
@@ -320,6 +330,20 @@ class ApiClient {
     });
   }
 
+  /**
+   * Set spool weight from scale measurement.
+   * This updates weight_current and resets consumed_since_weight to 0,
+   * effectively syncing the tracking to match the scale.
+   * @param id Spool ID
+   * @param weight Total weight in grams (including spool core)
+   */
+  async setSpoolWeight(id: string, weight: number): Promise<Spool> {
+    return this.request<Spool>(`/spools/${id}/weight`, {
+      method: "POST",
+      body: JSON.stringify({ weight }),
+    });
+  }
+
   // Spool K-Profiles
   async getSpoolKProfiles(spoolId: string): Promise<SpoolKProfile[]> {
     return this.request<SpoolKProfile[]>(`/spools/${spoolId}/k-profiles`);
@@ -403,6 +427,21 @@ class ApiClient {
 
   async getCalibrations(serial: string): Promise<CalibrationProfile[]> {
     return this.request<CalibrationProfile[]>(`/printers/${serial}/calibrations`);
+  }
+
+  async assignSpoolToSlot(
+    serial: string,
+    amsId: number,
+    trayId: number,
+    spoolId: string
+  ): Promise<AssignSpoolResponse> {
+    return this.request<AssignSpoolResponse>(
+      `/printers/${serial}/ams/${amsId}/tray/${trayId}/assign`,
+      {
+        method: "POST",
+        body: JSON.stringify({ spool_id: spoolId }),
+      }
+    );
   }
 
   // Device

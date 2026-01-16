@@ -1,11 +1,110 @@
 import { useState, useEffect, useCallback } from "preact/hooks";
 import { useWebSocket } from "../lib/websocket";
 import { api, CloudAuthStatus, VersionInfo, UpdateCheck, UpdateStatus, FirmwareCheck } from "../lib/api";
-import { Cloud, CloudOff, LogOut, Loader2, Mail, Lock, Key, Download, RefreshCw, CheckCircle, AlertCircle, GitBranch, ExternalLink, Wifi, WifiOff, Cpu, Usb, RotateCcw, Upload, HardDrive, Palette, Sun, Moon } from "lucide-preact";
+import { Cloud, CloudOff, LogOut, Loader2, Mail, Lock, Key, Download, RefreshCw, CheckCircle, AlertCircle, GitBranch, ExternalLink, Wifi, WifiOff, Cpu, Usb, RotateCcw, Upload, HardDrive, Palette, Sun, Moon, LayoutDashboard } from "lucide-preact";
 import { useToast } from "../lib/toast";
 import { SerialTerminal } from "../components/SerialTerminal";
 import { SpoolCatalogSettings } from "../components/SpoolCatalogSettings";
 import { useTheme, type ThemeStyle, type DarkBackground, type LightBackground, type ThemeAccent } from "../lib/theme";
+
+// Storage keys for dashboard settings
+const SPOOL_DISPLAY_DURATION_KEY = 'spoolbuddy-spool-display-duration';
+const DEFAULT_CORE_WEIGHT_KEY = 'spoolbuddy-default-core-weight';
+
+function DashboardSettings() {
+  const { showToast } = useToast();
+  const [spoolDisplayDuration, setSpoolDisplayDuration] = useState<number>(() => {
+    const stored = localStorage.getItem(SPOOL_DISPLAY_DURATION_KEY);
+    if (stored) {
+      const val = parseInt(stored, 10);
+      if (val >= 0 && val <= 300) return val;
+    }
+    return 10; // Default 10 seconds
+  });
+
+  const [defaultCoreWeight, setDefaultCoreWeight] = useState<number>(() => {
+    const stored = localStorage.getItem(DEFAULT_CORE_WEIGHT_KEY);
+    if (stored) {
+      const val = parseInt(stored, 10);
+      if (val >= 0 && val <= 500) return val;
+    }
+    return 250; // Default 250g (typical Bambu spool core)
+  });
+
+  const handleDurationChange = (value: number) => {
+    setSpoolDisplayDuration(value);
+    localStorage.setItem(SPOOL_DISPLAY_DURATION_KEY, String(value));
+    showToast('success', `Spool display duration set to ${value}s`);
+  };
+
+  const handleCoreWeightChange = (value: number) => {
+    setDefaultCoreWeight(value);
+    localStorage.setItem(DEFAULT_CORE_WEIGHT_KEY, String(value));
+    showToast('success', `Default core weight set to ${value}g`);
+  };
+
+  return (
+    <div class="card">
+      <div class="px-6 py-4 border-b border-[var(--border-color)]">
+        <div class="flex items-center gap-2">
+          <LayoutDashboard class="w-5 h-5 text-[var(--text-muted)]" />
+          <h2 class="text-lg font-medium text-[var(--text-primary)]">Dashboard</h2>
+        </div>
+      </div>
+      <div class="p-6 space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-medium text-[var(--text-primary)]">Spool Display Duration</p>
+            <p class="text-xs text-[var(--text-muted)]">
+              How long to show spool info after removing from scale
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <select
+              value={spoolDisplayDuration}
+              onChange={(e) => handleDurationChange(parseInt((e.target as HTMLSelectElement).value, 10))}
+              class="px-3 py-1.5 text-sm bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+            >
+              <option value="0">Immediately hide</option>
+              <option value="5">5 seconds</option>
+              <option value="10">10 seconds</option>
+              <option value="15">15 seconds</option>
+              <option value="30">30 seconds</option>
+              <option value="60">1 minute</option>
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-4 border-t border-[var(--border-color)]">
+          <div>
+            <p class="text-sm font-medium text-[var(--text-primary)]">Default Core Weight</p>
+            <p class="text-xs text-[var(--text-muted)]">
+              Empty spool weight for unknown spools (used to calculate remaining filament)
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <input
+              type="number"
+              min="0"
+              max="500"
+              value={defaultCoreWeight}
+              onChange={(e) => {
+                const val = parseInt((e.target as HTMLInputElement).value, 10);
+                if (!isNaN(val) && val >= 0 && val <= 500) {
+                  handleCoreWeightChange(val);
+                }
+              }}
+              class="w-20 px-3 py-1.5 text-sm bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none text-right"
+            />
+            <span class="text-sm text-[var(--text-muted)]">g</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function Settings() {
   const { deviceConnected, currentWeight } = useWebSocket();
@@ -493,6 +592,9 @@ export function Settings() {
           </div>
         </div>
       </div>
+
+      {/* Dashboard settings */}
+      <DashboardSettings />
 
       {/* Bambu Cloud settings */}
       <div class="card">

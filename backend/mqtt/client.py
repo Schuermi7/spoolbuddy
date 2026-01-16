@@ -533,7 +533,6 @@ class PrinterConnection:
             cali_idx=cali_idx,
             nozzle_diameter=nozzle_diameter,
         )
-        logger.info(f"[{self.serial}] Staged assignment for AMS {ams_id} tray {tray_id}: spool={spool_id}, type={tray_type}, cali_idx={cali_idx}")
         return True
 
     def cancel_assignment(self, ams_id: int, tray_id: int) -> bool:
@@ -545,7 +544,6 @@ class PrinterConnection:
         key = (ams_id, tray_id)
         if key in self._pending_assignments:
             del self._pending_assignments[key]
-            logger.info(f"[{self.serial}] Cancelled pending assignment for AMS {ams_id} tray {tray_id}")
             return True
         return False
 
@@ -565,10 +563,7 @@ class PrinterConnection:
         key = (ams_id, tray_id)
         assignment = self._pending_assignments.get(key)
         if not assignment:
-            logger.warning(f"[{self.serial}] _execute_pending_assignment called but no assignment for AMS {ams_id} tray {tray_id}")
             return
-
-        logger.info(f"[{self.serial}] >>> EXECUTING pending assignment for AMS {ams_id} tray {tray_id}: spool={assignment.spool_id}")
 
         # Send the filament setting command
         success = self.set_filament(
@@ -593,17 +588,13 @@ class PrinterConnection:
 
         # Remove from pending regardless of success (user can retry)
         del self._pending_assignments[key]
-        logger.info(f"[{self.serial}] Removed pending assignment, set_filament success={success}")
 
         # Notify callback
         if self._on_assignment_complete and self._loop:
             spool_id = assignment.spool_id
-            logger.info(f"[{self.serial}] Calling assignment complete callback: spool={spool_id}, success={success}")
             self._loop.call_soon_threadsafe(
                 lambda: self._on_assignment_complete(self.serial, ams_id, tray_id, spool_id, success)
             )
-        else:
-            logger.warning(f"[{self.serial}] Cannot notify: callback={self._on_assignment_complete is not None}, loop={self._loop is not None}")
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         """MQTT connect callback."""
@@ -724,9 +715,6 @@ class PrinterConnection:
         # Extract current stage (stg_cur) - detailed printer status
         if "stg_cur" in print_data:
             new_stg = print_data["stg_cur"]
-            if new_stg != self._state.stg_cur:
-                stage_name = get_stage_name(new_stg)
-                logger.info(f"[{self.serial}] stg_cur changed: {self._state.stg_cur} -> {new_stg} ({stage_name})")
             self._state.stg_cur = new_stg
             self._state.stg_cur_name = get_stage_name(new_stg)
 
@@ -900,7 +888,6 @@ class PrinterConnection:
             try:
                 new_tray_reading = int(tray_reading_bits_raw, 16) if isinstance(tray_reading_bits_raw, str) else int(tray_reading_bits_raw)
                 if new_tray_reading != self._state.tray_reading_bits:
-                    logger.info(f"[{self.serial}] tray_reading_bits changed: {self._state.tray_reading_bits} -> {new_tray_reading}")
                     self._state.tray_reading_bits = new_tray_reading
             except (ValueError, TypeError):
                 pass
@@ -919,9 +906,6 @@ class PrinterConnection:
                     # So we invert: extruder_id = 1 - bit8
                     bit8 = (info_val >> 8) & 0x1
                     extruder_id = 1 - bit8  # 0=right, 1=left
-                    old_extruder = self._ams_extruder_map.get(unit_id)
-                    if old_extruder != extruder_id:
-                        logger.info(f"[{self.serial}] AMS {unit_id} extruder changed: {old_extruder} -> {extruder_id} (info={info_val})")
                     self._ams_extruder_map[unit_id] = extruder_id
                 except (ValueError, TypeError):
                     pass
@@ -968,12 +952,7 @@ class PrinterConnection:
                     was_empty = not prev_tray_type
                     is_occupied = bool(curr_tray_type)
 
-                    # Log state changes for trays with pending assignments
-                    if key in self._pending_assignments:
-                        logger.info(f"[{self.serial}] AMS {unit_id} tray {tray_id}: prev='{prev_tray_type}' curr='{curr_tray_type}' was_empty={was_empty} is_occupied={is_occupied}")
-
                     if was_empty and is_occupied and key in self._pending_assignments:
-                        logger.info(f"[{self.serial}] Spool inserted into AMS {unit_id} tray {tray_id} - executing pending assignment")
                         trays_to_check.append((unit_id, tray_id))
 
             units.append(AmsUnit(

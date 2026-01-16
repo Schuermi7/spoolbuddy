@@ -92,15 +92,24 @@ export function SpoolDetail() {
     }
   };
 
+  const handleBack = () => {
+    // Use browser history to go back properly
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      navigate("/");
+    }
+  };
+
   if (loading) {
     return (
-      <div class="p-8 text-center text-gray-500">Loading...</div>
+      <div class="p-8 text-center text-[var(--text-muted)]">Loading...</div>
     );
   }
 
   if (!spool) {
     return (
-      <div class="p-8 text-center text-gray-500">Spool not found</div>
+      <div class="p-8 text-center text-[var(--text-muted)]">Spool not found</div>
     );
   }
 
@@ -111,40 +120,40 @@ export function SpoolDetail() {
       {/* Header */}
       <div class="flex items-center space-x-4">
         <button
-          onClick={() => navigate("/inventory")}
-          class="p-2 text-gray-400 hover:text-gray-600"
+          onClick={handleBack}
+          class="p-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
         >
           <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
           </svg>
         </button>
         <div
-          class="w-12 h-12 rounded-full border-2 border-gray-200"
+          class="w-12 h-12 rounded-full border-2 border-[var(--border-color)]"
           style={{ backgroundColor: colorHex }}
         />
         <div>
-          <h1 class="text-2xl font-bold text-gray-900">
+          <h1 class="text-2xl font-bold text-[var(--text-primary)]">
             {colorName || "Unnamed Spool"}
           </h1>
-          <p class="text-gray-600">
+          <p class="text-[var(--text-secondary)]">
             {brand} {material} {subtype}
           </p>
         </div>
       </div>
 
       {/* Form */}
-      <form onSubmit={handleSave} class="bg-white rounded-lg shadow">
+      <form onSubmit={handleSave} class="card">
         <div class="p-6 space-y-6">
           {/* Basic info */}
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label class="block text-sm font-medium text-gray-700">
+              <label class="block text-sm font-medium text-[var(--text-primary)]">
                 Material *
               </label>
               <select
                 value={material}
                 onChange={(e) => setMaterial((e.target as HTMLSelectElement).value)}
-                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                class="input mt-1 w-full"
               >
                 <option>PLA</option>
                 <option>PETG</option>
@@ -156,7 +165,7 @@ export function SpoolDetail() {
               </select>
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700">
+              <label class="block text-sm font-medium text-[var(--text-primary)]">
                 Subtype
               </label>
               <input
@@ -164,7 +173,7 @@ export function SpoolDetail() {
                 value={subtype}
                 onInput={(e) => setSubtype((e.target as HTMLInputElement).value)}
                 placeholder="e.g., Basic, Silk, Matte"
-                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                class="input mt-1 w-full"
               />
             </div>
           </div>
@@ -172,7 +181,7 @@ export function SpoolDetail() {
           {/* Color */}
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label class="block text-sm font-medium text-gray-700">
+              <label class="block text-sm font-medium text-[var(--text-primary)]">
                 Color Name
               </label>
               <input
@@ -180,11 +189,11 @@ export function SpoolDetail() {
                 value={colorName}
                 onInput={(e) => setColorName((e.target as HTMLInputElement).value)}
                 placeholder="e.g., Red, Galaxy Black"
-                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                class="input mt-1 w-full"
               />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700">
+              <label class="block text-sm font-medium text-[var(--text-primary)]">
                 RGBA Color Code
               </label>
               <div class="mt-1 flex items-center space-x-2">
@@ -194,10 +203,10 @@ export function SpoolDetail() {
                   onInput={(e) => setRgba((e.target as HTMLInputElement).value.toUpperCase())}
                   placeholder="RRGGBBAA"
                   maxLength={8}
-                  class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 font-mono"
+                  class="input w-full font-mono"
                 />
                 <div
-                  class="w-10 h-10 rounded border border-gray-300"
+                  class="w-10 h-10 rounded border border-[var(--border-color)]"
                   style={{ backgroundColor: colorHex }}
                 />
               </div>
@@ -207,17 +216,17 @@ export function SpoolDetail() {
           {/* Brand and slicer */}
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label class="block text-sm font-medium text-gray-700">Brand</label>
+              <label class="block text-sm font-medium text-[var(--text-primary)]">Brand</label>
               <input
                 type="text"
                 value={brand}
                 onInput={(e) => setBrand((e.target as HTMLInputElement).value)}
                 placeholder="e.g., Bambu, Prusament"
-                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                class="input mt-1 w-full"
               />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700">
+              <label class="block text-sm font-medium text-[var(--text-primary)]">
                 Slicer Filament ID
               </label>
               <input
@@ -225,7 +234,7 @@ export function SpoolDetail() {
                 value={slicerFilament}
                 onInput={(e) => setSlicerFilament((e.target as HTMLInputElement).value)}
                 placeholder="e.g., GFA00"
-                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 font-mono"
+                class="input mt-1 w-full font-mono"
               />
             </div>
           </div>
@@ -233,7 +242,7 @@ export function SpoolDetail() {
           {/* Weights */}
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label class="block text-sm font-medium text-gray-700">
+              <label class="block text-sm font-medium text-[var(--text-primary)]">
                 Label Weight (g)
               </label>
               <input
@@ -241,11 +250,11 @@ export function SpoolDetail() {
                 value={labelWeight}
                 onInput={(e) => setLabelWeight((e.target as HTMLInputElement).value)}
                 placeholder="1000"
-                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                class="input mt-1 w-full"
               />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700">
+              <label class="block text-sm font-medium text-[var(--text-primary)]">
                 Core Weight (g)
               </label>
               <input
@@ -253,52 +262,81 @@ export function SpoolDetail() {
                 value={coreWeight}
                 onInput={(e) => setCoreWeight((e.target as HTMLInputElement).value)}
                 placeholder="250"
-                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                class="input mt-1 w-full"
               />
             </div>
           </div>
 
           {/* Note */}
           <div>
-            <label class="block text-sm font-medium text-gray-700">Note</label>
+            <label class="block text-sm font-medium text-[var(--text-primary)]">Note</label>
             <textarea
               value={note}
               onInput={(e) => setNote((e.target as HTMLTextAreaElement).value)}
               rows={3}
-              class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              class="input mt-1 w-full"
             />
           </div>
 
           {/* Tag info (read-only) */}
           {spool.tag_id && (
-            <div class="bg-gray-50 rounded-lg p-4">
-              <h3 class="text-sm font-medium text-gray-700 mb-2">Tag Information</h3>
+            <div class="bg-[var(--bg-tertiary)] rounded-lg p-4">
+              <h3 class="text-sm font-medium text-[var(--text-primary)] mb-2">Tag Information</h3>
               <dl class="grid grid-cols-2 gap-2 text-sm">
-                <dt class="text-gray-500">Tag ID</dt>
-                <dd class="font-mono">{spool.tag_id}</dd>
-                <dt class="text-gray-500">Tag Type</dt>
-                <dd>{spool.tag_type || "Unknown"}</dd>
-                <dt class="text-gray-500">Data Origin</dt>
-                <dd>{spool.data_origin || "Unknown"}</dd>
+                <dt class="text-[var(--text-muted)]">Tag ID</dt>
+                <dd class="font-mono text-[var(--text-primary)]">{spool.tag_id}</dd>
+                <dt class="text-[var(--text-muted)]">Tag Type</dt>
+                <dd class="text-[var(--text-primary)]">{spool.tag_type || "Unknown"}</dd>
+                <dt class="text-[var(--text-muted)]">Data Origin</dt>
+                <dd class="text-[var(--text-primary)]">{spool.data_origin || "Unknown"}</dd>
+              </dl>
+            </div>
+          )}
+
+          {/* Weight info (read-only) */}
+          {(spool.weight_current !== null || spool.weight_new !== null) && (
+            <div class="bg-[var(--bg-tertiary)] rounded-lg p-4">
+              <h3 class="text-sm font-medium text-[var(--text-primary)] mb-2">Weight Tracking</h3>
+              <dl class="grid grid-cols-2 gap-2 text-sm">
+                {spool.weight_new !== null && (
+                  <>
+                    <dt class="text-[var(--text-muted)]">Weight (New)</dt>
+                    <dd class="font-mono text-[var(--text-primary)]">{spool.weight_new}g</dd>
+                  </>
+                )}
+                {spool.weight_current !== null && (
+                  <>
+                    <dt class="text-[var(--text-muted)]">Weight (Current)</dt>
+                    <dd class="font-mono text-[var(--text-primary)]">{spool.weight_current}g</dd>
+                  </>
+                )}
+                {spool.weight_current !== null && spool.core_weight !== null && (
+                  <>
+                    <dt class="text-[var(--text-muted)]">Filament Remaining</dt>
+                    <dd class="font-mono text-[var(--text-primary)]">
+                      {Math.max(0, spool.weight_current - spool.core_weight)}g
+                    </dd>
+                  </>
+                )}
               </dl>
             </div>
           )}
         </div>
 
         {/* Actions */}
-        <div class="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-between">
+        <div class="px-6 py-4 bg-[var(--bg-tertiary)] border-t border-[var(--border-color)] flex justify-between rounded-b-lg">
           <button
             type="button"
             onClick={handleDelete}
             disabled={deleting}
-            class="px-4 py-2 text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
+            class="px-4 py-2 text-sm font-medium text-red-500 hover:text-red-400 disabled:opacity-50"
           >
             {deleting ? "Deleting..." : "Delete Spool"}
           </button>
           <button
             type="submit"
             disabled={saving}
-            class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+            class="btn btn-primary"
           >
             {saving ? "Saving..." : "Save Changes"}
           </button>

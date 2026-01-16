@@ -15,7 +15,7 @@ import { SpoolCard } from './SpoolCard'
 import { WeightProgress } from './ProgressBar'
 import { PrinterBadge, KBadge, OriginBadge } from './Badge'
 import { getNetWeight, getGrossWeight, compareWeights, formatWeight, getFilamentName } from './utils'
-import { ChevronUp, ChevronDown, Search, Check, AlertTriangle, Columns } from 'lucide-preact'
+import { ChevronUp, ChevronDown, Search, Check, AlertTriangle, Columns, RefreshCw } from 'lucide-preact'
 import { ColumnConfig } from './ColumnConfigModal'
 
 const columnHelper = createColumnHelper<Spool>()
@@ -51,6 +51,7 @@ interface SpoolsTableProps {
   spools: Spool[]
   spoolsInPrinters?: SpoolsInPrinters
   onEditSpool?: (spool: Spool) => void
+  onSyncWeight?: (spool: Spool) => void
   columnConfig?: ColumnConfig[]
   onOpenColumns?: () => void
 }
@@ -59,6 +60,7 @@ export function SpoolsTable({
   spools,
   spoolsInPrinters = {},
   onEditSpool,
+  onSyncWeight,
   columnConfig,
   onOpenColumns
 }: SpoolsTableProps) {
@@ -319,26 +321,38 @@ export function SpoolsTable({
           const diffStr = difference !== null ? (difference > 0 ? `+${Math.round(difference)}` : Math.round(difference)) : '?'
           const tooltip = isMatch
             ? `Scale: ${Math.round(scaleWeight)}g\nCalculated: ${Math.round(calculatedWeight)}g\nDifference: ${diffStr}g (within tolerance)`
-            : `Scale: ${Math.round(scaleWeight)}g\nCalculated: ${Math.round(calculatedWeight)}g\nDifference: ${diffStr}g\n\nMismatch! Possible causes:\n- Filament used without tracking\n- Incorrect core weight setting\n- Consumption tracking drift`
+            : `Scale: ${Math.round(scaleWeight)}g\nCalculated: ${Math.round(calculatedWeight)}g\nDifference: ${diffStr}g (mismatch!)`
 
           return (
             <div
-              class={`flex items-center gap-1 cursor-help ${isMatch ? 'weight-match' : 'weight-mismatch'}`}
+              class={`flex items-center gap-1 ${isMatch ? 'weight-match' : 'weight-mismatch'}`}
               title={tooltip}
             >
               <span>{Math.round(scaleWeight)}g</span>
               {isMatch ? (
                 <Check class="w-3 h-3" />
               ) : (
-                <AlertTriangle class="w-3 h-3" />
+                <>
+                  <AlertTriangle class="w-3 h-3" />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSyncWeight?.(spool)
+                    }}
+                    class="p-1 hover:bg-[var(--accent-color)]/20 rounded transition-colors text-[var(--accent-color)]"
+                    title="Sync: trust scale weight and reset tracking"
+                  >
+                    <RefreshCw class="w-3.5 h-3.5" />
+                  </button>
+                </>
               )}
             </div>
           )
         },
-        size: 80,
+        size: 100,
       }),
     ],
-    [spoolsInPrinters]
+    [spoolsInPrinters, onSyncWeight]
   )
 
   // Apply column configuration (visibility and order)

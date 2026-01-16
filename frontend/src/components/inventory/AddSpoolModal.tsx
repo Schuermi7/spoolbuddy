@@ -19,6 +19,8 @@ interface AddSpoolModalProps {
   onDelete?: (spool: Spool) => void  // Called when delete button is clicked
   onTagRemoved?: () => void  // Called after tag is successfully removed
   printersWithCalibrations?: PrinterWithCalibrations[]
+  initialTagId?: string | null  // Tag ID to pre-fill when adding new spool
+  initialWeight?: number | null  // Current weight from scale to pre-fill
 }
 
 interface SpoolFormData {
@@ -153,6 +155,7 @@ function SpoolWeightPicker({ catalog, value, onChange }: {
 }) {
   const [search, setSearch] = useState('')
   const [isOpen, setIsOpen] = useState(false)
+  const [selectedId, setSelectedId] = useState<number | null>(null) // Track selected entry by ID
   const inputRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -163,8 +166,10 @@ function SpoolWeightPicker({ catalog, value, onChange }: {
     return catalog.filter(e => e.name.toLowerCase().includes(lower))
   }, [catalog, search])
 
-  // Get display value for the selected weight
-  const selectedEntry = catalog.find(c => c.weight === value)
+  // Get display value - prefer selected entry by ID, fallback to weight match
+  const selectedEntry = selectedId
+    ? catalog.find(c => c.id === selectedId)
+    : catalog.find(c => c.weight === value)
   const displayValue = isOpen ? search : (selectedEntry?.name || '')
 
   // Handle click outside to close dropdown
@@ -212,9 +217,10 @@ function SpoolWeightPicker({ catalog, value, onChange }: {
                     key={entry.id}
                     type="button"
                     class={`w-full px-3 py-2 text-left text-sm hover:bg-[var(--bg-tertiary)] flex justify-between items-center ${
-                      entry.weight === value ? 'bg-[var(--accent-color)]/10 text-[var(--accent-color)]' : 'text-[var(--text-primary)]'
+                      (selectedId ? entry.id === selectedId : entry.weight === value) ? 'bg-[var(--accent-color)]/10 text-[var(--accent-color)]' : 'text-[var(--text-primary)]'
                     }`}
                     onClick={() => {
+                      setSelectedId(entry.id)
                       onChange(entry.weight)
                       setIsOpen(false)
                       setSearch('')
@@ -248,7 +254,7 @@ function SpoolWeightPicker({ catalog, value, onChange }: {
   )
 }
 
-export function AddSpoolModal({ isOpen, onClose, onSave, editSpool, onDelete, onTagRemoved, printersWithCalibrations = [] }: AddSpoolModalProps) {
+export function AddSpoolModal({ isOpen, onClose, onSave, editSpool, onDelete, onTagRemoved, printersWithCalibrations = [], initialTagId, initialWeight }: AddSpoolModalProps) {
   const [formData, setFormData] = useState<SpoolFormData>(defaultFormData)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -383,6 +389,10 @@ export function AddSpoolModal({ isOpen, onClose, onSave, editSpool, onDelete, on
         ext_has_k: selectedProfiles.size > 0,
         // Set data_origin for new spools (preserve existing for edits)
         data_origin: isEditing ? undefined : 'web',
+        // Set tag_id: preserve for edits, use initialTagId for new spools
+        tag_id: isEditing ? editSpool?.tag_id : initialTagId || null,
+        // Set weight_current from scale if provided (for new spools)
+        weight_current: isEditing ? editSpool?.weight_current : initialWeight || null,
       }
 
       const savedSpool = await onSave(input)
@@ -481,10 +491,26 @@ export function AddSpoolModal({ isOpen, onClose, onSave, editSpool, onDelete, on
   const toggleProfileSelected = (serial: string, caliIdx: number, extruderId?: number | null) => {
     // Use consistent key format - null/undefined both become 'null'
     const key = `${serial}:${caliIdx}:${extruderId ?? 'null'}`
+    // Printer/nozzle combination key (only one profile allowed per printer/nozzle)
+    const printerNozzleKey = `${serial}:${extruderId ?? 'null'}`
+
     setSelectedProfiles(prev => {
       const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
+      if (next.has(key)) {
+        // Deselect if already selected
+        next.delete(key)
+      } else {
+        // Remove any existing profile for this printer/nozzle combination first
+        for (const existingKey of next) {
+          const parts = existingKey.split(':')
+          const existingPrinterNozzle = `${parts[0]}:${parts[2]}`
+          if (existingPrinterNozzle === printerNozzleKey) {
+            next.delete(existingKey)
+          }
+        }
+        // Then add the new selection
+        next.add(key)
+      }
       return next
     })
   }

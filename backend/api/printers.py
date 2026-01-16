@@ -547,10 +547,8 @@ async def assign_spool_to_tray(serial: str, ams_id: int, tray_id: int, request: 
         needs_replacement = tray_has_spool and not tray_matches_spool
         if needs_replacement:
             message = "Replace spool to configure slot"
-            logger.info(f"Staged assignment (replacement needed) for spool {spool.id} ({spool.material}) to {serial} AMS {ams_id} tray {tray_id}")
         else:
             message = "Insert spool to configure slot"
-            logger.info(f"Staged assignment for spool {spool.id} ({spool.material}) to {serial} AMS {ams_id} tray {tray_id}")
 
         return AssignResponse(status="staged", message=message, needs_replacement=needs_replacement)
 
@@ -568,7 +566,6 @@ async def unassign_spool_from_tray(serial: str, ams_id: int, tray_id: int):
 
     db = await get_db()
     await db.unassign_slot(serial, ams_id, tray_id)
-    logger.info(f"Unassigned spool from {serial} AMS {ams_id} tray {tray_id}")
 
 
 @router.post("/{serial}/ams/{ams_id}/tray/{tray_id}/cancel-staged", status_code=204)
@@ -583,8 +580,6 @@ async def cancel_staged_assignment(serial: str, ams_id: int, tray_id: int):
     cancelled = _printer_manager.cancel_assignment(serial, ams_id, tray_id)
     if not cancelled:
         raise HTTPException(status_code=404, detail="No staged assignment found")
-
-    logger.info(f"Cancelled staged assignment for {serial} AMS {ams_id} tray {tray_id}")
 
 
 @router.get("/{serial}/assignments")

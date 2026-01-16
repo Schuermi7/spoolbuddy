@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS spools (
     core_weight INTEGER DEFAULT 250,
     weight_new INTEGER,
     weight_current INTEGER,
+    weight_used REAL DEFAULT 0,
     slicer_filament TEXT,
     slicer_filament_name TEXT,
     location TEXT,
@@ -259,6 +260,10 @@ class Database:
 
         if 'slicer_filament_name' not in columns:
             await self.conn.execute("ALTER TABLE spools ADD COLUMN slicer_filament_name TEXT")
+            await self.conn.commit()
+
+        if 'weight_used' not in columns:
+            await self.conn.execute("ALTER TABLE spools ADD COLUMN weight_used REAL DEFAULT 0")
             await self.conn.commit()
 
     async def disconnect(self):
@@ -594,16 +599,32 @@ class Database:
         return await self.get_spool(spool_id)
 
     async def set_spool_weight(self, spool_id: str, weight: int) -> Optional[Spool]:
-        """Set spool current weight from scale and reset consumed_since_weight."""
+        """Set spool current weight from scale and recalculate weight_used to match.
+
+        This syncs the tracking to match the scale reading by:
+        1. Setting weight_current to the scale reading (gross weight)
+        2. Resetting consumed_since_weight to 0
+        3. Calculating weight_used so that: gross = core_weight + (label_weight - weight_used)
+           => weight_used = core_weight + label_weight - gross
+        """
         spool = await self.get_spool(spool_id)
         if not spool:
             return None
 
+        # Calculate what weight_used should be to match the scale reading
+        # gross_weight = core_weight + net_weight
+        # net_weight = label_weight - weight_used - consumed_since_weight
+        # After sync: gross = core_weight + (label_weight - weight_used_new - 0)
+        # So: weight_used_new = core_weight + label_weight - gross
+        core_weight = spool.core_weight or 0
+        label_weight = spool.label_weight or 0
+        weight_used_new = max(0, core_weight + label_weight - weight)
+
         now = int(time.time())
         await self.conn.execute(
-            """UPDATE spools SET weight_current = ?, consumed_since_weight = 0, updated_at = ?
+            """UPDATE spools SET weight_current = ?, weight_used = ?, consumed_since_weight = 0, updated_at = ?
                WHERE id = ?""",
-            (weight, now, spool_id)
+            (weight, weight_used_new, now, spool_id)
         )
         await self.conn.commit()
         return await self.get_spool(spool_id)

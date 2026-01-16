@@ -145,6 +145,12 @@ BLOCK_DURATION = 5  # seconds to block after manual clear
 _device_current_tag_id: Optional[str] = None  # Last tag ID from device (may be None if NFC flaky)
 _device_tag_data: Optional[Dict] = None  # Points to staged data for backwards compat
 
+# Tag removal debounce - avoid false removals from flaky NFC reads
+_tag_last_seen_time: float = time.time()  # When we last saw a tag (init to now to prevent immediate false removal)
+_tag_removal_debounce: float = 0.5  # seconds to wait before confirming tag removal
+_confirmed_tag_id: Optional[str] = None  # Tag ID after debounce (what frontend sees)
+_ever_had_tag: bool = False  # Track if we've ever seen a tag in this session
+
 # Simulation mode - prevents device updates from clearing simulated tag
 _simulating_tag: bool = False
 
@@ -476,8 +482,6 @@ _assignment_completions_max = 10  # Keep last 10 completions
 
 def on_assignment_complete(serial: str, ams_id: int, tray_id: int, spool_id: str, success: bool):
     """Handle assignment completion (spool inserted and configured)."""
-    logger.info(f"Assignment complete: {serial} AMS {ams_id} tray {tray_id} spool={spool_id} success={success}")
-
     # Store for polling
     import time
     _assignment_completions.append((time.time(), serial, ams_id, tray_id, spool_id, success))
@@ -792,23 +796,31 @@ async def update_device_state(
         }
         logger.info(f"Received decoded tag data from device: {tag_vendor} {tag_material}")
 
-    await handle_device_state({
+    # Build message - only include tag_id if it was actually provided in the request
+    # (not just defaulting to None from missing query param)
+    message = {
         "weight": weight,
         "stable": stable if stable is not None else False,
-        "tag_id": tag_id,
-        "tag_data": tag_data,
-    })
+    }
+    # Only include tag_id if tag-related params were provided
+    # (device sends tag_id when reporting tag status, omits it for weight-only updates)
+    if tag_id is not None or tag_vendor is not None:
+        message["tag_id"] = tag_id
+        message["tag_data"] = tag_data
+
+    await handle_device_state(message)
     return {"ok": True}
 
 
 @app.post("/api/test/simulate-tag")
 async def simulate_tag(present: bool = True):
     """Test endpoint to simulate NFC tag for UI development."""
-    global _device_tag_data, _device_current_tag_id, _simulating_tag
+    global _device_tag_data, _device_current_tag_id, _simulating_tag, _confirmed_tag_id
 
     if present:
         _simulating_tag = True
         _device_current_tag_id = "A7:B2:65:00"
+        _confirmed_tag_id = "A7:B2:65:00"
         _device_tag_data = {
             "uid": "A7:B2:65:00",
             "tag_type": "bambulab",
@@ -823,6 +835,7 @@ async def simulate_tag(present: bool = True):
     else:
         _simulating_tag = False
         _device_current_tag_id = None
+        _confirmed_tag_id = None
         _device_tag_data = None
         logger.info("Simulated tag REMOVED (simulation mode OFF)")
 
@@ -853,10 +866,12 @@ async def api_get_staging():
 
 async def handle_tag_detected(websocket: WebSocket, message: dict):
     """Handle tag_detected message from device."""
-    global _device_tag_data, _device_current_tag_id
+    global _device_tag_data, _device_current_tag_id, _confirmed_tag_id, _tag_last_seen_time
     uid_hex = message.get("uid", "")
     tag_type = message.get("tag_type", "")  # "NTAG", "MifareClassic1K", etc.
     _device_current_tag_id = uid_hex
+    _confirmed_tag_id = uid_hex  # Immediately confirm when tag_detected message received
+    _tag_last_seen_time = time.time()
 
     # Data depends on tag type
     ndef_url = message.get("ndef_url")  # For NTAG with URL
@@ -972,15 +987,21 @@ async def handle_device_state(message: dict):
 
     Uses the staging system: when a tag is detected, it's staged for 30s.
     Flaky NFC reads (tag_id=None) don't clear staging - only timeout or new tag does.
+    Tag removal is debounced to avoid false triggers from flaky NFC reads.
     """
     global _device_last_weight, _device_weight_stable, _device_current_tag_id, _device_tag_data
+    global _tag_last_seen_time, _confirmed_tag_id
 
     weight = message.get("weight")
     stable = message.get("stable", False)
-    tag_id = message.get("tag_id")
     provided_tag_data = message.get("tag_data")
 
+    # Check if tag_id is explicitly present in message (vs just missing)
+    has_tag_field = "tag_id" in message
+    tag_id = message.get("tag_id") if has_tag_field else None
+
     state_changed = False
+    now = time.time()
 
     # Update weight
     if weight is not None and weight != _device_last_weight:
@@ -995,8 +1016,42 @@ async def handle_device_state(message: dict):
     if _simulating_tag:
         return  # Ignore all tag updates in simulation mode
 
-    # Track what device reports (for debugging)
-    _device_current_tag_id = tag_id
+    # === Debounced tag detection for frontend display ===
+    # Only process tag changes if the message explicitly includes tag_id field
+    # (ignore weight-only updates that don't mention tag at all)
+    global _ever_had_tag
+
+    logger.debug(f"device_state: has_tag_field={has_tag_field}, tag_id={tag_id}, weight={weight}, confirmed={_confirmed_tag_id}")
+
+    # Detect spool removal by weight: if weight drops below threshold, clear tag
+    # (device firmware may cache tag_id even after spool is physically removed)
+    REMOVAL_WEIGHT_THRESHOLD = 50  # grams - below this, assume spool removed
+    if weight is not None and weight < REMOVAL_WEIGHT_THRESHOLD and _confirmed_tag_id is not None:
+        logger.info(f"Spool removal detected by weight ({weight}g < {REMOVAL_WEIGHT_THRESHOLD}g), clearing tag {_confirmed_tag_id}")
+        _confirmed_tag_id = None
+        _device_current_tag_id = None
+        state_changed = True
+    elif has_tag_field:
+        # Track raw device tag (for debugging/staging)
+        _device_current_tag_id = tag_id
+
+        if tag_id:
+            # Tag detected - immediately confirm and update last seen time
+            _tag_last_seen_time = now
+            _ever_had_tag = True
+            if _confirmed_tag_id != tag_id:
+                logger.info(f"Tag confirmed: {tag_id} (was {_confirmed_tag_id})")
+                _confirmed_tag_id = tag_id
+                state_changed = True
+        else:
+            # Explicit tag_id: null - confirm removal after debounce period
+            if _ever_had_tag and _confirmed_tag_id is not None:
+                time_since_last_seen = now - _tag_last_seen_time
+                logger.debug(f"Tag null, time_since_last_seen={time_since_last_seen:.2f}s, debounce={_tag_removal_debounce}")
+                if time_since_last_seen >= _tag_removal_debounce:
+                    logger.info(f"Tag removal confirmed after debounce (was {_confirmed_tag_id})")
+                    _confirmed_tag_id = None
+                    state_changed = True
 
     # === Staging Logic ===
     # Only stage when we have BOTH tag_id AND decoded data
@@ -1116,12 +1171,14 @@ async def handle_device_state(message: dict):
     # Keep legacy _device_tag_data in sync with staging for backwards compat
     _device_tag_data = get_staged_tag()
 
-    # Broadcast weight updates
+    # Broadcast state updates (weight and tag)
     if state_changed:
+        logger.debug(f"Broadcasting device_state: weight={_device_last_weight}, tag_id={_confirmed_tag_id}")
         await broadcast_message({
             "type": "device_state",
             "weight": _device_last_weight,
             "stable": _device_weight_stable,
+            "tag_id": _confirmed_tag_id,  # Use debounced tag for real-time display (avoids flaky NFC)
         })
 
 
@@ -1178,7 +1235,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "update_available": _device_update_available,
                 "last_weight": _device_last_weight,
                 "weight_stable": _device_weight_stable,
-                "current_tag_id": _device_current_tag_id,
+                "current_tag_id": _confirmed_tag_id,  # Use debounced tag for real-time display
             },
             "printers": {
                 serial: conn.connected

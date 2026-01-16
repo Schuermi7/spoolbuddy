@@ -142,8 +142,8 @@ function getHumidityDisplay(rawHumidity: number | null): { level: number; icon: 
   return { level, icon: String(Math.min(level, 4)) };
 }
 
-// Spool icon SVG - colored spool shape like OrcaSlicer
-function SpoolIcon({ color, isEmpty, size = 32 }: { color: string; isEmpty: boolean; size?: number }) {
+// Spool icon SVG - colored spool shape like OrcaSlicer (simple circle for AMS cards)
+export function SpoolIcon({ color, isEmpty, size = 32 }: { color: string; isEmpty: boolean; size?: number }) {
   if (isEmpty) {
     return (
       <div
@@ -161,6 +161,100 @@ function SpoolIcon({ color, isEmpty, size = 32 }: { color: string; isEmpty: bool
       <circle cx="16" cy="16" r="14" fill={color} stroke="white" strokeWidth="1.5" strokeOpacity="0.7" />
       {/* Inner shadow/depth */}
       <circle cx="16" cy="16" r="11" fill={color} style={{ filter: "brightness(0.85)" }} />
+    </svg>
+  );
+}
+
+// Detailed 3D spool icon for dashboard/detail views
+export function DetailedSpoolIcon({ color, size = 64 }: { color: string; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64">
+      {/* Left flange (ellipse) */}
+      <ellipse
+        cx="16"
+        cy="32"
+        rx="8"
+        ry="26"
+        fill="#e8e8e8"
+        stroke="#888"
+        strokeWidth="1"
+      />
+      {/* Left flange inner hole */}
+      <ellipse
+        cx="16"
+        cy="32"
+        rx="2"
+        ry="4"
+        fill="#666"
+      />
+
+      {/* Filament body (center) */}
+      <rect
+        x="16"
+        y="8"
+        width="32"
+        height="48"
+        fill={color}
+        rx="2"
+      />
+
+      {/* Grid lines on filament */}
+      <g stroke="#fff" strokeWidth="0.5" strokeOpacity="0.3">
+        {/* Horizontal lines */}
+        <line x1="16" y1="16" x2="48" y2="16" />
+        <line x1="16" y1="24" x2="48" y2="24" />
+        <line x1="16" y1="32" x2="48" y2="32" />
+        <line x1="16" y1="40" x2="48" y2="40" />
+        <line x1="16" y1="48" x2="48" y2="48" />
+        {/* Vertical lines */}
+        <line x1="24" y1="8" x2="24" y2="56" />
+        <line x1="32" y1="8" x2="32" y2="56" />
+        <line x1="40" y1="8" x2="40" y2="56" />
+      </g>
+
+      {/* Right flange (ellipse) - partial, showing 3D effect */}
+      <ellipse
+        cx="48"
+        cy="32"
+        rx="8"
+        ry="26"
+        fill="none"
+        stroke="#888"
+        strokeWidth="1"
+      />
+      {/* Right flange visible portion */}
+      <path
+        d="M 48 6 A 8 26 0 0 1 48 58"
+        fill="#e8e8e8"
+        stroke="#888"
+        strokeWidth="1"
+      />
+      {/* Right flange inner edge */}
+      <ellipse
+        cx="48"
+        cy="32"
+        rx="2"
+        ry="4"
+        fill="#666"
+      />
+
+      {/* Highlight on filament */}
+      <rect
+        x="16"
+        y="8"
+        width="32"
+        height="12"
+        fill="url(#spoolHighlight)"
+        rx="2"
+      />
+
+      {/* Gradient definitions */}
+      <defs>
+        <linearGradient id="spoolHighlight" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="white" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="white" stopOpacity="0" />
+        </linearGradient>
+      </defs>
     </svg>
   );
 }

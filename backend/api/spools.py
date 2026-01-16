@@ -141,25 +141,21 @@ async def link_tag_to_spool(spool_id: str, request: LinkTagRequest):
 async def set_spool_weight(spool_id: str, request: SetWeightRequest):
     """Set spool current weight from scale measurement.
 
-    This updates the current weight and resets the consumed_since_weight counter.
-    The weight should be the total weight including the spool core.
+    This updates the current weight (gross weight including core) and resets
+    the consumed_since_weight counter, effectively syncing tracking to the scale.
 
     Args:
         spool_id: Spool ID
-        request: Weight data (total weight in grams)
+        request: Weight data (total/gross weight in grams, including spool core)
     """
     db = await get_db()
 
-    # Get spool to calculate net filament weight
     spool = await db.get_spool(spool_id)
     if not spool:
         raise HTTPException(status_code=404, detail="Spool not found")
 
-    # Subtract core weight to get filament weight
-    core_weight = spool.core_weight or 250
-    filament_weight = max(0, request.weight - core_weight)
-
-    updated = await db.set_spool_weight(spool_id, filament_weight)
+    # Store gross weight directly (weight_current is the total scale reading)
+    updated = await db.set_spool_weight(spool_id, request.weight)
     return updated
 
 

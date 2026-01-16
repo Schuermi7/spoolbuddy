@@ -36,6 +36,8 @@ export interface PrinterState {
   tray_now_left: number | null; // Active tray for left nozzle (extruder 1)
   tray_now_right: number | null; // Active tray for right nozzle (extruder 0)
   active_extruder: number | null; // Currently active extruder (0=right, 1=left)
+  // Tray reading state (RFID scanning)
+  tray_reading_bits: number | null; // Bitmask of trays currently being read
 }
 
 interface WebSocketState {
@@ -117,11 +119,31 @@ export function WebSocketProvider({ children }: { children: ComponentChildren })
         setWeightStable(message.stable as boolean);
         break;
 
+      case "device_state":
+        // Backend sends device_state with weight updates
+        if (message.weight !== undefined) {
+          setCurrentWeight(message.weight as number);
+        }
+        if (message.stable !== undefined) {
+          setWeightStable(message.stable as boolean);
+        }
+        // Update tag_id if explicitly included in message (handles both setting and clearing)
+        if ("tag_id" in message) {
+          setCurrentTagId(message.tag_id as string | null);
+        }
+        break;
+
       case "tag_detected":
         setCurrentTagId(message.tag_id as string);
         break;
 
+      case "tag_staged":
+        // Backend broadcasts tag_staged when a tag is detected and staged
+        setCurrentTagId(message.tag_id as string);
+        break;
+
       case "tag_removed":
+      case "staging_cleared":
         setCurrentTagId(null);
         break;
 

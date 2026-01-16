@@ -41,6 +41,7 @@ class Spool(SpoolBase):
     added_full: Optional[int] = 0
     consumed_since_add: Optional[float] = 0
     consumed_since_weight: Optional[float] = 0
+    weight_used: Optional[float] = 0
     created_at: Optional[int] = None
     updated_at: Optional[int] = None
 
