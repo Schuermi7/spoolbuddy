@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS spools (
     data_origin TEXT,
     tag_type TEXT,
     ext_has_k INTEGER DEFAULT 0,
+    archived_at INTEGER,
     created_at INTEGER DEFAULT (strftime('%s', 'now')),
     updated_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
@@ -266,6 +267,10 @@ class Database:
             await self.conn.execute("ALTER TABLE spools ADD COLUMN weight_used REAL DEFAULT 0")
             await self.conn.commit()
 
+        if 'archived_at' not in columns:
+            await self.conn.execute("ALTER TABLE spools ADD COLUMN archived_at INTEGER")
+            await self.conn.commit()
+
     async def disconnect(self):
         """Close database connection."""
         if self._connection:
@@ -280,8 +285,16 @@ class Database:
     # ============ Spool Operations ============
 
     async def get_spools(self) -> list[Spool]:
-        """Get all spools."""
-        async with self.conn.execute("SELECT * FROM spools ORDER BY created_at DESC") as cursor:
+        """Get all spools with last used timestamps."""
+        # Join with usage_history to get last used time
+        query = """
+            SELECT s.*, (
+                SELECT MAX(uh.timestamp) FROM usage_history uh WHERE uh.spool_id = s.id
+            ) as last_used_time
+            FROM spools s
+            ORDER BY s.created_at DESC
+        """
+        async with self.conn.execute(query) as cursor:
             rows = await cursor.fetchall()
             return [Spool(**dict(row)) for row in rows]
 
@@ -348,9 +361,38 @@ class Database:
         await self.conn.commit()
         return cursor.rowcount > 0
 
-    async def get_spool_by_tag(self, tag_id: str) -> Optional[Spool]:
-        """Get a spool by tag ID (base64-encoded UID)."""
-        async with self.conn.execute("SELECT * FROM spools WHERE tag_id = ?", (tag_id,)) as cursor:
+    async def archive_spool(self, spool_id: str) -> Optional[Spool]:
+        """Archive a spool by setting archived_at timestamp."""
+        now = int(time.time())
+        await self.conn.execute(
+            "UPDATE spools SET archived_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, spool_id)
+        )
+        await self.conn.commit()
+        return await self.get_spool(spool_id)
+
+    async def restore_spool(self, spool_id: str) -> Optional[Spool]:
+        """Restore an archived spool by clearing archived_at."""
+        now = int(time.time())
+        await self.conn.execute(
+            "UPDATE spools SET archived_at = NULL, updated_at = ? WHERE id = ?",
+            (now, spool_id)
+        )
+        await self.conn.commit()
+        return await self.get_spool(spool_id)
+
+    async def get_spool_by_tag(self, tag_id: str, include_archived: bool = False) -> Optional[Spool]:
+        """Get a spool by tag ID (base64-encoded UID).
+
+        Args:
+            tag_id: The tag ID to look up
+            include_archived: If False (default), skip archived spools so recycled tags work
+        """
+        if include_archived:
+            query = "SELECT * FROM spools WHERE tag_id = ?"
+        else:
+            query = "SELECT * FROM spools WHERE tag_id = ? AND archived_at IS NULL"
+        async with self.conn.execute(query, (tag_id,)) as cursor:
             row = await cursor.fetchone()
             return Spool(**dict(row)) if row else None
 
@@ -361,6 +403,15 @@ class Database:
         ) as cursor:
             rows = await cursor.fetchall()
             return [Spool(**dict(row)) for row in rows]
+
+    async def clear_spool_tag(self, spool_id: str) -> None:
+        """Remove tag_id from a spool (for tag recycling)."""
+        now = int(time.time())
+        await self.conn.execute(
+            "UPDATE spools SET tag_id = NULL, tag_type = NULL, updated_at = ? WHERE id = ?",
+            (now, spool_id)
+        )
+        await self.conn.commit()
 
     async def link_tag_to_spool(
         self, spool_id: str, tag_id: str, tag_type: Optional[str] = None, data_origin: Optional[str] = None

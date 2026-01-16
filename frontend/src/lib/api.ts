@@ -26,8 +26,10 @@ export interface Spool {
   data_origin: string | null;
   tag_type: string | null;
   ext_has_k: boolean;         // Whether has pressure advance K calibration
+  archived_at: number | null;  // Unix timestamp when archived, null = active
   created_at: number | null;
   updated_at: number | null;
+  last_used_time: number | null;  // Unix timestamp of last usage
 }
 
 // Map for tracking which spools are in which printers
@@ -327,6 +329,18 @@ class ApiClient {
   async deleteSpool(id: string): Promise<void> {
     return this.request<void>(`/spools/${id}`, {
       method: "DELETE",
+    });
+  }
+
+  async archiveSpool(id: string): Promise<Spool> {
+    return this.request<Spool>(`/spools/${id}/archive`, {
+      method: "POST",
+    });
+  }
+
+  async restoreSpool(id: string): Promise<Spool> {
+    return this.request<Spool>(`/spools/${id}/restore`, {
+      method: "POST",
     });
   }
 

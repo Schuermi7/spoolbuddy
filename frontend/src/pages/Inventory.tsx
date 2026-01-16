@@ -176,6 +176,26 @@ export function Inventory() {
     }
   };
 
+  const handleArchiveSpool = async (spool: Spool) => {
+    try {
+      await api.archiveSpool(spool.id);
+      await loadSpools();
+      showToast('success', `Archived "${spool.color_name || spool.material}" spool`);
+    } catch (e) {
+      showToast('error', e instanceof Error ? e.message : 'Failed to archive spool');
+    }
+  };
+
+  const handleRestoreSpool = async (spool: Spool) => {
+    try {
+      await api.restoreSpool(spool.id);
+      await loadSpools();
+      showToast('success', `Restored "${spool.color_name || spool.material}" spool`);
+    } catch (e) {
+      showToast('error', e instanceof Error ? e.message : 'Failed to restore spool');
+    }
+  };
+
   const handleColumnConfigSave = (config: ColumnConfig[]) => {
     setColumnConfig(config);
     saveColumnConfig(config);
@@ -256,6 +276,8 @@ export function Inventory() {
         onSave={handleEditSpool}
         editSpool={editSpool}
         onDelete={(spool) => setDeleteSpool(spool)}
+        onArchive={handleArchiveSpool}
+        onRestore={handleRestoreSpool}
         onTagRemoved={loadSpools}
         printersWithCalibrations={printersWithCalibrations}
       />

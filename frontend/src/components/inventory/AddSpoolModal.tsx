@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'preact/hooks'
 import { Modal } from './Modal'
 import { Spool, SpoolInput, Printer, CalibrationProfile, SlicerPreset, SpoolKProfile, CatalogEntry, api } from '../../lib/api'
-import { X, ChevronDown, ChevronRight, Cloud, CloudOff, Trash2, Unlink } from 'lucide-preact'
+import { X, ChevronDown, ChevronRight, Cloud, CloudOff, Trash2, Unlink, Archive, ArchiveRestore } from 'lucide-preact'
 import { getFilamentOptions, COLOR_PRESETS } from './utils'
 import { useToast } from '../../lib/toast'
 
@@ -17,6 +17,8 @@ interface AddSpoolModalProps {
   onSave: (input: SpoolInput) => Promise<Spool>  // Returns the saved spool
   editSpool?: Spool | null  // If provided, we're editing
   onDelete?: (spool: Spool) => void  // Called when delete button is clicked
+  onArchive?: (spool: Spool) => void  // Called when archive button is clicked
+  onRestore?: (spool: Spool) => void  // Called when restore button is clicked
   onTagRemoved?: () => void  // Called after tag is successfully removed
   printersWithCalibrations?: PrinterWithCalibrations[]
   initialTagId?: string | null  // Tag ID to pre-fill when adding new spool
@@ -105,12 +107,28 @@ function parsePresetName(name: string): { brand: string; material: string; varia
     afterMaterial = afterMaterial.replace(/^[-_\s]+/, '')
   }
 
-  // Only extract variant if it matches a known variant
+  // Check for known variant - could be before OR after material
   let variant = ''
+
+  // First check after material (most common)
   for (const v of KNOWN_VARIANTS) {
     if (afterMaterial.toLowerCase().includes(v.toLowerCase())) {
       variant = v
       break
+    }
+  }
+
+  // If no variant found after material, check if brand contains a known variant
+  // and strip it from brand (e.g., "Overture Matte" -> brand: "Overture", variant: "Matte")
+  if (!variant && brand) {
+    for (const v of KNOWN_VARIANTS) {
+      // Check if brand ends with the variant (with space before it)
+      const variantPattern = new RegExp(`\\s+${v}$`, 'i')
+      if (variantPattern.test(brand)) {
+        variant = v
+        brand = brand.replace(variantPattern, '').trim()
+        break
+      }
     }
   }
 
@@ -254,7 +272,7 @@ function SpoolWeightPicker({ catalog, value, onChange }: {
   )
 }
 
-export function AddSpoolModal({ isOpen, onClose, onSave, editSpool, onDelete, onTagRemoved, printersWithCalibrations = [], initialTagId, initialWeight }: AddSpoolModalProps) {
+export function AddSpoolModal({ isOpen, onClose, onSave, editSpool, onDelete, onArchive, onRestore, onTagRemoved, printersWithCalibrations = [], initialTagId, initialWeight }: AddSpoolModalProps) {
   const [formData, setFormData] = useState<SpoolFormData>(defaultFormData)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -703,6 +721,34 @@ export function AddSpoolModal({ isOpen, onClose, onSave, editSpool, onDelete, on
               >
                 <Unlink class="w-4 h-4" />
                 Remove Tag
+              </button>
+            )}
+            {isEditing && editSpool && !editSpool.archived_at && onArchive && (
+              <button
+                class="btn btn-secondary"
+                onClick={() => {
+                  onArchive(editSpool)
+                  onClose()
+                }}
+                disabled={isSubmitting}
+                title="Archive this spool"
+              >
+                <Archive class="w-4 h-4" />
+                Archive
+              </button>
+            )}
+            {isEditing && editSpool && editSpool.archived_at && onRestore && (
+              <button
+                class="btn btn-secondary"
+                onClick={() => {
+                  onRestore(editSpool)
+                  onClose()
+                }}
+                disabled={isSubmitting}
+                title="Restore this spool"
+              >
+                <ArchiveRestore class="w-4 h-4" />
+                Restore
               </button>
             )}
           </div>

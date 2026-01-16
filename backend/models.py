@@ -42,8 +42,10 @@ class Spool(SpoolBase):
     consumed_since_add: Optional[float] = 0
     consumed_since_weight: Optional[float] = 0
     weight_used: Optional[float] = 0
+    archived_at: Optional[int] = None  # Timestamp when archived, null = active
     created_at: Optional[int] = None
     updated_at: Optional[int] = None
+    last_used_time: Optional[int] = None  # From usage_history table
 
     class Config:
         from_attributes = True

@@ -8,6 +8,7 @@ import {
   getPaginationRowModel,
   useReactTable,
   SortingState,
+  ColumnFiltersState,
   ColumnDef,
 } from '@tanstack/react-table'
 import { Spool, SpoolsInPrinters } from '../../lib/api'
@@ -21,6 +22,48 @@ import { ColumnConfig } from './ColumnConfigModal'
 const columnHelper = createColumnHelper<Spool>()
 const PAGE_SIZE_KEY = 'spoolbuddy-page-size'
 const SORTING_KEY = 'spoolbuddy-sorting'
+const USAGE_FILTER_KEY = 'spoolbuddy-usage-filter'
+const ARCHIVE_FILTER_KEY = 'spoolbuddy-archive-filter'
+const COLUMN_FILTERS_KEY = 'spoolbuddy-column-filters'
+
+type UsageFilter = 'all' | 'used' | 'unused'
+type ArchiveFilter = 'active' | 'archived' | 'all'
+
+function getStoredUsageFilter(): UsageFilter {
+  try {
+    const stored = localStorage.getItem(USAGE_FILTER_KEY)
+    if (stored && ['all', 'used', 'unused'].includes(stored)) {
+      return stored as UsageFilter
+    }
+  } catch {
+    // Ignore errors
+  }
+  return 'all'
+}
+
+function getStoredArchiveFilter(): ArchiveFilter {
+  try {
+    const stored = localStorage.getItem(ARCHIVE_FILTER_KEY)
+    if (stored && ['active', 'archived', 'all'].includes(stored)) {
+      return stored as ArchiveFilter
+    }
+  } catch {
+    // Ignore errors
+  }
+  return 'active'  // Default to showing only active (non-archived) spools
+}
+
+function getStoredColumnFilters(): ColumnFiltersState {
+  try {
+    const stored = localStorage.getItem(COLUMN_FILTERS_KEY)
+    if (stored) {
+      return JSON.parse(stored)
+    }
+  } catch {
+    // Ignore errors
+  }
+  return []
+}
 
 function getStoredPageSize(): number {
   try {
@@ -67,6 +110,9 @@ export function SpoolsTable({
   const [sorting, setSorting] = useState<SortingState>(getStoredSorting)
   const [globalFilter, setGlobalFilter] = useState('')
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
+  const [usageFilter, setUsageFilter] = useState<UsageFilter>(getStoredUsageFilter)
+  const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>(getStoredArchiveFilter)
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(getStoredColumnFilters)
   const [pagination, setPagination] = useState({
     pageIndex: 0,
     pageSize: getStoredPageSize(),
@@ -81,6 +127,21 @@ export function SpoolsTable({
   useEffect(() => {
     localStorage.setItem(SORTING_KEY, JSON.stringify(sorting))
   }, [sorting])
+
+  // Save usage filter to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem(USAGE_FILTER_KEY, usageFilter)
+  }, [usageFilter])
+
+  // Save archive filter to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem(ARCHIVE_FILTER_KEY, archiveFilter)
+  }, [archiveFilter])
+
+  // Save column filters to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem(COLUMN_FILTERS_KEY, JSON.stringify(columnFilters))
+  }, [columnFilters])
 
   // All available column definitions
   const allColumnDefs = useMemo(
@@ -113,6 +174,18 @@ export function SpoolsTable({
           const value = info.getValue()
           if (!value) return <span class="text-[var(--text-muted)]">-</span>
           const date = new Date(parseInt(value) * 1000)
+          return date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' })
+        },
+        size: 90,
+      }),
+      // Last Used
+      columnHelper.accessor('last_used_time', {
+        id: 'last_used_time',
+        header: 'Last Used',
+        cell: (info) => {
+          const value = info.getValue()
+          if (!value) return <span class="text-[var(--text-muted)]">Never</span>
+          const date = new Date(value * 1000)
           return date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' })
         },
         size: 90,
@@ -378,16 +451,70 @@ export function SpoolsTable({
     return result
   }, [allColumnDefs, columnConfig])
 
+  // Filter spools by archive status and usage
+  const filteredSpools = useMemo(() => {
+    let result = spools
+
+    // Filter by archive status first
+    if (archiveFilter === 'active') {
+      result = result.filter(s => s.archived_at === null)
+    } else if (archiveFilter === 'archived') {
+      result = result.filter(s => s.archived_at !== null)
+    }
+
+    // Then filter by usage
+    if (usageFilter === 'used') {
+      result = result.filter(s => s.last_used_time !== null)
+    } else if (usageFilter === 'unused') {
+      result = result.filter(s => s.last_used_time === null)
+    }
+
+    return result
+  }, [spools, archiveFilter, usageFilter])
+
+  // Extract unique values for column filters
+  const uniqueMaterials = useMemo(() =>
+    [...new Set(spools.map(s => s.material).filter(Boolean))].sort(),
+    [spools]
+  )
+  const uniqueBrands = useMemo(() =>
+    [...new Set(spools.map(s => s.brand).filter(Boolean))].sort() as string[],
+    [spools]
+  )
+  const uniqueLocations = useMemo(() =>
+    [...new Set(spools.map(s => s.location).filter(Boolean))].sort() as string[],
+    [spools]
+  )
+
+  // Helper to get current filter value
+  const getFilterValue = (columnId: string): string => {
+    const filter = columnFilters.find(f => f.id === columnId)
+    return (filter?.value as string) || ''
+  }
+
+  // Helper to set filter value
+  const setFilterValue = (columnId: string, value: string) => {
+    setColumnFilters(prev => {
+      const others = prev.filter(f => f.id !== columnId)
+      if (value) {
+        return [...others, { id: columnId, value }]
+      }
+      return others
+    })
+  }
+
   const table = useReactTable({
-    data: spools,
+    data: filteredSpools,
     columns,
     state: {
       sorting,
       globalFilter,
+      columnFilters,
       pagination,
     },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
+    onColumnFiltersChange: setColumnFilters,
     onPaginationChange: setPagination,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -408,7 +535,62 @@ export function SpoolsTable({
             <Columns class="w-4 h-4" />
             <span>Columns</span>
           </button>
-          <div class="relative w-full sm:w-72">
+          <select
+            value={archiveFilter}
+            onChange={(e) => setArchiveFilter((e.target as HTMLSelectElement).value as ArchiveFilter)}
+            class="select"
+            title="Filter by status"
+          >
+            <option value="active">Active</option>
+            <option value="archived">Archived</option>
+            <option value="all">All</option>
+          </select>
+          <select
+            value={usageFilter}
+            onChange={(e) => setUsageFilter((e.target as HTMLSelectElement).value as UsageFilter)}
+            class="select"
+            title="Filter by usage"
+          >
+            <option value="all">All spools</option>
+            <option value="used">Used only</option>
+            <option value="unused">Unused only</option>
+          </select>
+          <select
+            value={getFilterValue('material')}
+            onChange={(e) => setFilterValue('material', (e.target as HTMLSelectElement).value)}
+            class="select"
+            title="Filter by material"
+          >
+            <option value="">All materials</option>
+            {uniqueMaterials.map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <select
+            value={getFilterValue('brand')}
+            onChange={(e) => setFilterValue('brand', (e.target as HTMLSelectElement).value)}
+            class="select"
+            title="Filter by brand"
+          >
+            <option value="">All brands</option>
+            {uniqueBrands.map(b => (
+              <option key={b} value={b}>{b}</option>
+            ))}
+          </select>
+          {uniqueLocations.length > 0 && (
+            <select
+              value={getFilterValue('location')}
+              onChange={(e) => setFilterValue('location', (e.target as HTMLSelectElement).value)}
+              class="select"
+              title="Filter by location"
+            >
+              <option value="">All locations</option>
+              {uniqueLocations.map(l => (
+                <option key={l} value={l}>{l}</option>
+              ))}
+            </select>
+          )}
+          <div class="relative">
             <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--text-muted)]" />
             <input
               type="text"
@@ -416,6 +598,7 @@ export function SpoolsTable({
               onInput={(e) => setGlobalFilter((e.target as HTMLInputElement).value)}
               placeholder="Search spools..."
               class="input input-with-icon"
+              style={{ width: '500px' }}
             />
           </div>
         </div>
@@ -464,7 +647,11 @@ export function SpoolsTable({
           ))}
           {table.getRowModel().rows.length === 0 && (
             <div class="col-span-full text-center py-12 text-[var(--text-muted)]">
-              {globalFilter ? 'No spools match your search' : 'No spools in inventory'}
+              {globalFilter ? 'No spools match your search' :
+               archiveFilter === 'archived' ? 'No archived spools' :
+               usageFilter === 'used' ? 'No used spools' :
+               usageFilter === 'unused' ? 'No unused spools' :
+               'No spools in inventory'}
             </div>
           )}
         </div>
@@ -508,7 +695,11 @@ export function SpoolsTable({
                   {table.getRowModel().rows.length === 0 && (
                     <tr>
                       <td colSpan={columns.length} class="text-center py-12 text-[var(--text-muted)]">
-                        {globalFilter ? 'No spools match your search' : 'No spools in inventory'}
+                        {globalFilter ? 'No spools match your search' :
+                         archiveFilter === 'archived' ? 'No archived spools' :
+                         usageFilter === 'used' ? 'No used spools' :
+                         usageFilter === 'unused' ? 'No unused spools' :
+                         'No spools in inventory'}
                       </td>
                     </tr>
                   )}

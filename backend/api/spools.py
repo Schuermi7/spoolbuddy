@@ -106,12 +106,15 @@ async def link_tag_to_spool(spool_id: str, request: LinkTagRequest):
     (e.g., via web frontend). This is useful when users want to tag existing
     spools in their inventory.
 
+    If the tag is currently on an archived spool, it will be automatically
+    removed from that spool (recycled tags).
+
     Returns:
         Updated spool with tag_id set
 
     Raises:
         404: Spool not found
-        409: Tag is already assigned to another spool
+        409: Tag is already assigned to another active spool
     """
     db = await get_db()
 
@@ -120,11 +123,16 @@ async def link_tag_to_spool(spool_id: str, request: LinkTagRequest):
     if not spool:
         raise HTTPException(status_code=404, detail="Spool not found")
 
-    # Check if tag is already assigned to another spool
-    existing_spool = await db.get_spool_by_tag(request.tag_id)
+    # Check if tag is already assigned to another ACTIVE spool
+    existing_spool = await db.get_spool_by_tag(request.tag_id, include_archived=False)
     if existing_spool and existing_spool.id != spool_id:
         detail = f"Tag already assigned to spool: {existing_spool.brand or 'Unknown'} {existing_spool.material}"
         raise HTTPException(status_code=409, detail=detail)
+
+    # Check if tag is on an archived spool - if so, clear it (tag recycling)
+    archived_spool = await db.get_spool_by_tag(request.tag_id, include_archived=True)
+    if archived_spool and archived_spool.id != spool_id and archived_spool.archived_at:
+        await db.clear_spool_tag(archived_spool.id)
 
     # Link the tag
     updated = await db.link_tag_to_spool(
@@ -239,3 +247,40 @@ async def save_spool_k_profiles(spool_id: str, request: SaveKProfilesRequest):
     await db.save_spool_k_profiles(spool_id, profiles)
 
     return {"status": "ok", "count": len(profiles)}
+
+
+@router.post("/{spool_id}/archive", response_model=Spool)
+async def archive_spool(spool_id: str):
+    """Archive a spool.
+
+    Sets archived_at timestamp to mark the spool as archived.
+    Archived spools are hidden from the default inventory view.
+    """
+    db = await get_db()
+
+    spool = await db.get_spool(spool_id)
+    if not spool:
+        raise HTTPException(status_code=404, detail="Spool not found")
+
+    if spool.archived_at:
+        raise HTTPException(status_code=400, detail="Spool is already archived")
+
+    return await db.archive_spool(spool_id)
+
+
+@router.post("/{spool_id}/restore", response_model=Spool)
+async def restore_spool(spool_id: str):
+    """Restore an archived spool.
+
+    Clears archived_at timestamp to make the spool active again.
+    """
+    db = await get_db()
+
+    spool = await db.get_spool(spool_id)
+    if not spool:
+        raise HTTPException(status_code=404, detail="Spool not found")
+
+    if not spool.archived_at:
+        raise HTTPException(status_code=400, detail="Spool is not archived")
+
+    return await db.restore_spool(spool_id)

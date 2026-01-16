@@ -21,6 +21,7 @@ const defaultColumns: ColumnConfig[] = [
   // Date columns
   { id: 'added_time', label: 'Added', visible: true },
   { id: 'encode_time', label: 'Encoded', visible: false },
+  { id: 'last_used_time', label: 'Last Used', visible: true },
   // Visual/Identity
   { id: 'rgba', label: 'Color', visible: true },
   { id: 'material', label: 'Material', visible: true },
