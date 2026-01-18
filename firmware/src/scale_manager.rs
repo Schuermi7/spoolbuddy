@@ -123,14 +123,39 @@ fn save_calibration_to_nvs(calibration: &Calibration) -> bool {
     true
 }
 
+/// Counter for rate-limiting error logs
+static ERROR_LOG_COUNTER: Mutex<u32> = Mutex::new(0);
+
 /// Poll the scale (call from main loop)
 pub fn poll_scale() {
     let mut guard = SCALE_STATE.lock().unwrap();
     if let Some(ref mut state) = *guard {
         if state.initialized {
-            let _ = shared_i2c::with_i2c(|i2c| {
+            let result = shared_i2c::with_i2c(|i2c| {
                 nau7802::read_weight(i2c, state)
             });
+            match result {
+                Some(Ok(_)) => {
+                    // Reset error counter on success
+                    let mut counter = ERROR_LOG_COUNTER.lock().unwrap();
+                    *counter = 0;
+                }
+                Some(Err(e)) => {
+                    let mut counter = ERROR_LOG_COUNTER.lock().unwrap();
+                    *counter += 1;
+                    // Log first error and then every 50th error
+                    if *counter == 1 || *counter % 50 == 0 {
+                        warn!("Scale read error: {:?} (count: {})", e, *counter);
+                    }
+                }
+                None => {
+                    let mut counter = ERROR_LOG_COUNTER.lock().unwrap();
+                    *counter += 1;
+                    if *counter == 1 || *counter % 50 == 0 {
+                        warn!("Scale read failed: I2C not initialized (count: {})", *counter);
+                    }
+                }
+            }
         }
     }
 }
@@ -248,6 +273,36 @@ pub extern "C" fn scale_calibrate(known_weight_grams: f32) -> i32 {
             _ => -1,
         }
     } else {
+        -1
+    }
+}
+
+/// Reset calibration to defaults
+#[no_mangle]
+pub extern "C" fn scale_reset_calibration() -> i32 {
+    info!("Resetting scale calibration to defaults...");
+    let mut guard = SCALE_STATE.lock().unwrap();
+    if let Some(ref mut state) = *guard {
+        // Reset to default calibration
+        state.calibration = Calibration::default();
+        state.weight_grams = 0.0;
+        state.stable = false;
+        state.stable_count = 0;
+
+        // Clear saved calibration from NVS
+        let nvs_guard = NVS_PARTITION.lock().unwrap();
+        if let Some(ref nvs_partition) = *nvs_guard {
+            if let Ok(mut nvs) = EspNvs::new(nvs_partition.clone(), NVS_NAMESPACE, true) {
+                let _ = nvs.remove(NVS_KEY_CALIBRATION);
+            }
+        }
+        drop(nvs_guard);
+
+        info!("Scale calibration reset: zero_offset={}, cal_factor={}",
+              state.calibration.zero_offset, state.calibration.cal_factor);
+        0
+    } else {
+        warn!("Scale reset failed: no state");
         -1
     }
 }

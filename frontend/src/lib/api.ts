@@ -464,7 +464,15 @@ class ApiClient {
   }
 
   async tareScale(): Promise<void> {
-    return this.request<void>("/device/tare", { method: "POST" });
+    return this.request<void>("/device/scale/tare", { method: "POST" });
+  }
+
+  async calibrateScale(knownWeight: number): Promise<void> {
+    return this.request<void>(`/device/scale/calibrate?known_weight=${knownWeight}`, { method: "POST" });
+  }
+
+  async resetScaleCalibration(): Promise<void> {
+    return this.request<void>("/device/scale/reset", { method: "POST" });
   }
 
   async writeTag(spoolId: string): Promise<void> {

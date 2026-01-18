@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::ffi::{c_char, c_int};
 use std::sync::Mutex;
 use embedded_svc::http::client::Client as HttpClient;
+use embedded_svc::io::Write;
 
 /// Maximum number of printers to cache (reduced for memory)
 const MAX_PRINTERS: usize = 4;
@@ -352,6 +353,11 @@ fn get_wifi_params() -> String {
     params
 }
 
+// External C function to shutdown display before reboot
+extern "C" {
+    fn display_shutdown();
+}
+
 /// Send heartbeat to backend to indicate display is connected
 /// Also checks for pending commands (e.g., reboot)
 /// Includes WiFi status so backend always has current network info
@@ -404,7 +410,9 @@ fn send_heartbeat(base_url: &str) {
             // Check for reboot command
             else if body.contains("\"command\":\"reboot\"") || body.contains("\"command\": \"reboot\"") {
                 log::info!("Received reboot command from backend");
-                std::thread::sleep(std::time::Duration::from_millis(500));
+                // Properly shutdown display before reboot to prevent display shift
+                unsafe { display_shutdown(); }
+                std::thread::sleep(std::time::Duration::from_millis(100));
                 unsafe { esp_restart(); }
             }
             // Check for scale tare command
@@ -415,17 +423,30 @@ fn send_heartbeat(base_url: &str) {
             }
             // Check for scale calibrate command (e.g., "scale_calibrate:100.0")
             else if body.contains("\"command\":\"scale_calibrate:") || body.contains("\"command\": \"scale_calibrate:") {
+                log::info!("Detected scale_calibrate command in response body");
                 // Extract the weight value from command
                 if let Some(start) = body.find("scale_calibrate:") {
                     let after_cmd = &body[start + 16..];
                     // Find end of weight value (quote or whitespace)
                     let end = after_cmd.find(|c: char| c == '"' || c.is_whitespace()).unwrap_or(after_cmd.len());
-                    if let Ok(known_weight) = after_cmd[..end].parse::<f32>() {
+                    let weight_str = &after_cmd[..end];
+                    log::info!("Parsing weight value: '{}'", weight_str);
+                    if let Ok(known_weight) = weight_str.parse::<f32>() {
                         log::info!("Received scale_calibrate command from backend: {}g", known_weight);
                         let result = crate::scale_manager::scale_calibrate(known_weight);
-                        log::info!("Scale calibrate result: {}", result);
+                        log::info!("Scale calibrate result: {} (0=success, -1=error)", result);
+                    } else {
+                        log::warn!("Failed to parse weight value: '{}'", weight_str);
                     }
+                } else {
+                    log::warn!("Could not find scale_calibrate: in body");
                 }
+            }
+            // Check for scale reset command
+            else if body.contains("\"command\":\"scale_reset\"") || body.contains("\"command\": \"scale_reset\"") {
+                log::info!("Received scale_reset command from backend");
+                let result = crate::scale_manager::scale_reset_calibration();
+                log::info!("Scale reset result: {}", result);
             }
         }
     }
@@ -1397,4 +1418,465 @@ pub extern "C" fn ota_start_update() -> c_int {
         // Note: perform_update reboots on success, so we only get here on error
     });
     0
+}
+
+// =============================================================================
+// Spool API Functions (for AMS assignment and K-profile lookup)
+// =============================================================================
+
+/// C-compatible spool info structure
+#[repr(C)]
+pub struct SpoolInfoC {
+    pub id: [u8; 64],           // Spool UUID
+    pub tag_id: [u8; 32],       // NFC tag UID
+    pub brand: [u8; 32],        // Vendor/brand name
+    pub material: [u8; 16],     // Material type (PLA, PETG, etc.)
+    pub subtype: [u8; 32],      // Material subtype (Basic, Matte, etc.)
+    pub color_name: [u8; 32],   // Color name
+    pub color_rgba: u32,        // RGBA packed color
+    pub label_weight: i32,      // Label weight in grams
+    pub slicer_filament: [u8; 32], // Slicer filament ID
+    pub valid: bool,            // True if spool was found
+}
+
+/// C-compatible K-profile structure
+#[repr(C)]
+pub struct SpoolKProfileC {
+    pub cali_idx: i32,          // Calibration index (-1 if not found)
+    pub k_value: [u8; 16],      // K-factor value as string
+    pub name: [u8; 64],         // Profile name
+    pub printer_serial: [u8; 32], // Printer serial this profile is for
+}
+
+/// API response for spool listing
+#[derive(Debug, Deserialize)]
+struct ApiSpool {
+    id: String,
+    tag_id: Option<String>,
+    brand: Option<String>,
+    material: Option<String>,
+    subtype: Option<String>,
+    color_name: Option<String>,
+    rgba: Option<String>,
+    label_weight: Option<i32>,
+    slicer_filament: Option<String>,
+}
+
+/// API response for K-profile
+#[derive(Debug, Deserialize)]
+struct ApiKProfile {
+    cali_idx: Option<i32>,
+    k_value: Option<String>,
+    name: Option<String>,
+    printer_serial: Option<String>,
+}
+
+/// API response for assign result
+#[derive(Debug, Deserialize)]
+struct ApiAssignResponse {
+    status: Option<String>,     // "configured" or "staged"
+    message: Option<String>,
+}
+
+/// Helper to copy string to fixed-size C buffer
+fn copy_to_c_buf(src: &str, dst: &mut [u8]) {
+    let bytes = src.as_bytes();
+    let copy_len = std::cmp::min(bytes.len(), dst.len() - 1);
+    dst[..copy_len].copy_from_slice(&bytes[..copy_len]);
+    dst[copy_len] = 0; // Null terminate
+}
+
+/// Helper to parse RGBA hex string to u32
+fn parse_rgba_hex(hex: &str) -> u32 {
+    let hex = hex.trim_start_matches('#');
+    let padded = if hex.len() == 6 {
+        format!("{}FF", hex)
+    } else {
+        hex.to_string()
+    };
+    u32::from_str_radix(&padded, 16).unwrap_or(0)
+}
+
+/// Get spool info by NFC tag ID
+/// Returns true if found, fills info struct
+#[no_mangle]
+pub extern "C" fn spool_get_by_tag(tag_id: *const c_char, info: *mut SpoolInfoC) -> bool {
+    if tag_id.is_null() || info.is_null() {
+        return false;
+    }
+
+    let tag_id_str = unsafe {
+        match std::ffi::CStr::from_ptr(tag_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        }
+    };
+
+    // Get backend URL
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    let base_url = manager.server_url.clone();
+    drop(manager);
+
+    if base_url.is_empty() {
+        return false;
+    }
+
+    // GET /api/spools to list all spools
+    let url = format!("{}/api/spools", base_url);
+
+    let config = HttpConfig {
+        timeout: Some(std::time::Duration::from_millis(HTTP_TIMEOUT_MS)),
+        ..Default::default()
+    };
+
+    let connection = match EspHttpConnection::new(&config) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let mut client = HttpClient::wrap(connection);
+    let request = match client.get(&url) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    let mut response = match request.submit() {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    // Read response body
+    let mut buf = vec![0u8; 8192];
+    let mut total = 0;
+    loop {
+        match response.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(_) => break,
+        }
+        if total >= buf.len() {
+            break;
+        }
+    }
+
+    if total == 0 {
+        return false;
+    }
+
+    // Parse JSON array of spools
+    let body = String::from_utf8_lossy(&buf[..total]);
+    let spools: Vec<ApiSpool> = match serde_json::from_str(&body) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    // Find spool with matching tag_id
+    for spool in spools {
+        if let Some(ref tid) = spool.tag_id {
+            if tid == tag_id_str {
+                // Found - fill info struct
+                let info_ref = unsafe { &mut *info };
+                *info_ref = SpoolInfoC {
+                    id: [0; 64],
+                    tag_id: [0; 32],
+                    brand: [0; 32],
+                    material: [0; 16],
+                    subtype: [0; 32],
+                    color_name: [0; 32],
+                    color_rgba: 0,
+                    label_weight: 0,
+                    slicer_filament: [0; 32],
+                    valid: true,
+                };
+
+                copy_to_c_buf(&spool.id, &mut info_ref.id);
+                copy_to_c_buf(tid, &mut info_ref.tag_id);
+                if let Some(ref b) = spool.brand {
+                    copy_to_c_buf(b, &mut info_ref.brand);
+                }
+                if let Some(ref m) = spool.material {
+                    copy_to_c_buf(m, &mut info_ref.material);
+                }
+                if let Some(ref s) = spool.subtype {
+                    copy_to_c_buf(s, &mut info_ref.subtype);
+                }
+                if let Some(ref c) = spool.color_name {
+                    copy_to_c_buf(c, &mut info_ref.color_name);
+                }
+                if let Some(ref rgba) = spool.rgba {
+                    info_ref.color_rgba = parse_rgba_hex(rgba);
+                }
+                if let Some(w) = spool.label_weight {
+                    info_ref.label_weight = w;
+                }
+                if let Some(ref sf) = spool.slicer_filament {
+                    copy_to_c_buf(sf, &mut info_ref.slicer_filament);
+                }
+
+                info!("spool_get_by_tag: found spool {} for tag {}", spool.id, tag_id_str);
+                return true;
+            }
+        }
+    }
+
+    info!("spool_get_by_tag: no spool found for tag {}", tag_id_str);
+    false
+}
+
+/// Get K-profile for a spool on a specific printer
+/// Returns true if found, fills profile struct
+#[no_mangle]
+pub extern "C" fn spool_get_k_profile_for_printer(
+    spool_id: *const c_char,
+    printer_serial: *const c_char,
+    profile: *mut SpoolKProfileC,
+) -> bool {
+    if spool_id.is_null() || printer_serial.is_null() || profile.is_null() {
+        return false;
+    }
+
+    let spool_id_str = unsafe {
+        match std::ffi::CStr::from_ptr(spool_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        }
+    };
+
+    let printer_serial_str = unsafe {
+        match std::ffi::CStr::from_ptr(printer_serial).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        }
+    };
+
+    // Get backend URL
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    let base_url = manager.server_url.clone();
+    drop(manager);
+
+    if base_url.is_empty() {
+        return false;
+    }
+
+    // GET /api/spools/{id}/k-profiles
+    let url = format!("{}/api/spools/{}/k-profiles", base_url, spool_id_str);
+
+    let config = HttpConfig {
+        timeout: Some(std::time::Duration::from_millis(HTTP_TIMEOUT_MS)),
+        ..Default::default()
+    };
+
+    let connection = match EspHttpConnection::new(&config) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let mut client = HttpClient::wrap(connection);
+    let request = match client.get(&url) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    let mut response = match request.submit() {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    // Read response body
+    let mut buf = vec![0u8; 4096];
+    let mut total = 0;
+    loop {
+        match response.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(_) => break,
+        }
+        if total >= buf.len() {
+            break;
+        }
+    }
+
+    if total == 0 {
+        return false;
+    }
+
+    // Parse JSON array of K-profiles
+    let body = String::from_utf8_lossy(&buf[..total]);
+    let profiles: Vec<ApiKProfile> = match serde_json::from_str(&body) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    // Find profile matching the printer serial
+    for p in profiles {
+        if let Some(ref serial) = p.printer_serial {
+            if serial == printer_serial_str {
+                // Found - fill profile struct
+                let profile_ref = unsafe { &mut *profile };
+                *profile_ref = SpoolKProfileC {
+                    cali_idx: p.cali_idx.unwrap_or(-1),
+                    k_value: [0; 16],
+                    name: [0; 64],
+                    printer_serial: [0; 32],
+                };
+
+                if let Some(ref kv) = p.k_value {
+                    copy_to_c_buf(kv, &mut profile_ref.k_value);
+                }
+                if let Some(ref n) = p.name {
+                    copy_to_c_buf(n, &mut profile_ref.name);
+                }
+                copy_to_c_buf(serial, &mut profile_ref.printer_serial);
+
+                info!("spool_get_k_profile: found profile for {} on {}", spool_id_str, printer_serial_str);
+                return true;
+            }
+        }
+    }
+
+    info!("spool_get_k_profile: no profile for {} on {}", spool_id_str, printer_serial_str);
+    false
+}
+
+/// Assign result enum (matches simulator)
+/// 0 = Error, 1 = Configured, 2 = Staged, 3 = StagedReplace
+#[no_mangle]
+pub extern "C" fn backend_assign_spool_to_tray(
+    printer_serial: *const c_char,
+    ams_id: c_int,
+    tray_id: c_int,
+    spool_id: *const c_char,
+) -> c_int {
+    if printer_serial.is_null() || spool_id.is_null() {
+        return 0; // Error
+    }
+
+    let printer_serial_str = unsafe {
+        match std::ffi::CStr::from_ptr(printer_serial).to_str() {
+            Ok(s) => s,
+            Err(_) => return 0,
+        }
+    };
+
+    let spool_id_str = unsafe {
+        match std::ffi::CStr::from_ptr(spool_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return 0,
+        }
+    };
+
+    // Get backend URL
+    let manager = BACKEND_MANAGER.lock().unwrap();
+    let base_url = manager.server_url.clone();
+    drop(manager);
+
+    if base_url.is_empty() {
+        return 0;
+    }
+
+    // POST /api/printers/{serial}/ams/{ams_id}/tray/{tray_id}/assign
+    let url = format!(
+        "{}/api/printers/{}/ams/{}/tray/{}/assign",
+        base_url, printer_serial_str, ams_id, tray_id
+    );
+
+    // Build JSON body
+    let body = format!(r#"{{"spool_id":"{}"}}"#, spool_id_str);
+
+    info!("backend_assign_spool_to_tray: POST {} with {}", url, body);
+
+    let config = HttpConfig {
+        timeout: Some(std::time::Duration::from_millis(HTTP_TIMEOUT_MS)),
+        ..Default::default()
+    };
+
+    let connection = match EspHttpConnection::new(&config) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to create HTTP connection: {:?}", e);
+            return 0;
+        }
+    };
+
+    let mut client = HttpClient::wrap(connection);
+
+    // POST request with JSON body
+    // Use request() method with headers that include Content-Length
+    let headers = [
+        ("Content-Type", "application/json"),
+        ("Content-Length", &body.len().to_string()),
+    ];
+
+    let mut request = match client.request(embedded_svc::http::Method::Post, &url, &headers) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Failed to create POST request: {:?}", e);
+            return 0;
+        }
+    };
+
+    // Write body
+    if let Err(e) = request.write(body.as_bytes()) {
+        warn!("Failed to write request body: {:?}", e);
+        return 0;
+    }
+
+    // Flush to ensure body is sent
+    if let Err(e) = request.flush() {
+        warn!("Failed to flush request: {:?}", e);
+        return 0;
+    }
+
+    let mut response = match request.submit() {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Failed to submit request: {:?}", e);
+            return 0;
+        }
+    };
+
+    let status = response.status();
+
+    // Read response body
+    let mut buf = vec![0u8; 1024];
+    let mut total = 0;
+    loop {
+        match response.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(_) => break,
+        }
+        if total >= buf.len() {
+            break;
+        }
+    }
+
+    if status != 200 && status != 201 {
+        warn!("Assign failed with status {}", status);
+        return 0;
+    }
+
+    // Parse response
+    if total > 0 {
+        let body = String::from_utf8_lossy(&buf[..total]);
+        if let Ok(resp) = serde_json::from_str::<ApiAssignResponse>(&body) {
+            if let Some(ref s) = resp.status {
+                match s.as_str() {
+                    "configured" => {
+                        info!("Assign result: configured");
+                        return 1;
+                    }
+                    "staged" => {
+                        info!("Assign result: staged");
+                        return 2;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Default to configured if status was OK
+    info!("Assign result: assuming configured (status {})", status);
+    1
 }

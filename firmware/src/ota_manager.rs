@@ -24,6 +24,11 @@ use log::info;
 use std::ptr;
 use std::sync::Mutex;
 
+// External C function to shutdown display before reboot
+extern "C" {
+    fn display_shutdown();
+}
+
 /// OTA state
 #[derive(Debug, Clone, PartialEq)]
 pub enum OtaState {
@@ -169,6 +174,9 @@ pub fn perform_update(server_url: &str) -> Result<(), String> {
     info!("OTA complete, rebooting in 2 seconds...");
     std::thread::sleep(std::time::Duration::from_secs(2));
 
+    // Properly shutdown display before reboot to prevent display shift
+    unsafe { display_shutdown(); }
+    std::thread::sleep(std::time::Duration::from_millis(100));
     unsafe { esp_restart(); }
 
     // esp_restart() never returns, but Rust needs a return value

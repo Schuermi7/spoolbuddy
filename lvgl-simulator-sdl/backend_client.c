@@ -883,7 +883,7 @@ bool spool_exists_by_tag(const char *tag_id) {
     return found;
 }
 
-bool spool_get_by_tag(const char *tag_id, SpoolInfo *info) {
+bool spool_get_by_tag_full(const char *tag_id, SpoolInfo *info) {
     if (!tag_id || !info || !g_curl) {
         if (info) info->valid = false;
         return false;
@@ -970,6 +970,28 @@ bool spool_get_by_tag(const char *tag_id, SpoolInfo *info) {
     }
 
     free(response.data);
+    return found;
+}
+
+// Firmware-compatible wrapper (uses SpoolInfoC with smaller field sizes)
+bool spool_get_by_tag(const char *tag_id, SpoolInfoC *info) {
+    if (!info) return false;
+    memset(info, 0, sizeof(SpoolInfoC));
+
+    SpoolInfo full = {0};
+    bool found = spool_get_by_tag_full(tag_id, &full);
+    if (found && full.valid) {
+        strncpy(info->id, full.id, sizeof(info->id) - 1);
+        strncpy(info->tag_id, full.tag_id, sizeof(info->tag_id) - 1);
+        strncpy(info->brand, full.brand, sizeof(info->brand) - 1);
+        strncpy(info->material, full.material, sizeof(info->material) - 1);
+        strncpy(info->subtype, full.subtype, sizeof(info->subtype) - 1);
+        strncpy(info->color_name, full.color_name, sizeof(info->color_name) - 1);
+        info->color_rgba = full.color_rgba;
+        info->label_weight = full.label_weight;
+        strncpy(info->slicer_filament, full.slicer_filament, sizeof(info->slicer_filament) - 1);
+        info->valid = true;
+    }
     return found;
 }
 
@@ -1124,7 +1146,7 @@ int spool_get_k_profiles(const char *spool_id, SpoolKProfile *profiles, int max_
 }
 
 // Get K-profile for a spool matching a specific printer
-bool spool_get_k_profile_for_printer(const char *spool_id, const char *printer_serial, SpoolKProfile *profile) {
+bool spool_get_k_profile_for_printer_full(const char *spool_id, const char *printer_serial, SpoolKProfile *profile) {
     if (!spool_id || !printer_serial || !profile) {
         printf("[backend] spool_get_k_profile_for_printer: invalid params (spool=%s, serial=%s)\n",
                spool_id ? spool_id : "NULL", printer_serial ? printer_serial : "NULL");
@@ -1148,6 +1170,22 @@ bool spool_get_k_profile_for_printer(const char *spool_id, const char *printer_s
 
     printf("[backend] No matching K-profile found for printer %s\n", printer_serial);
     return false;
+}
+
+// Firmware-compatible wrapper (uses SpoolKProfileC with different field order)
+bool spool_get_k_profile_for_printer(const char *spool_id, const char *printer_serial, SpoolKProfileC *profile) {
+    if (!profile) return false;
+    memset(profile, 0, sizeof(SpoolKProfileC));
+
+    SpoolKProfile full = {0};
+    bool found = spool_get_k_profile_for_printer_full(spool_id, printer_serial, &full);
+    if (found) {
+        profile->cali_idx = full.cali_idx;
+        strncpy(profile->k_value, full.k_value, sizeof(profile->k_value) - 1);
+        strncpy(profile->name, full.name, sizeof(profile->name) - 1);
+        strncpy(profile->printer_serial, full.printer_serial, sizeof(profile->printer_serial) - 1);
+    }
+    return found;
 }
 
 // Get list of spools without NFC tags
@@ -1344,6 +1382,9 @@ AssignResult backend_assign_spool_to_tray(const char *printer_serial, int ams_id
     free(json_str);
 
     AssignResult result = ASSIGN_RESULT_ERROR;
+
+    printf("[backend] assign_spool_to_tray: curl_res=%d, http_code=%ld, response=%s\n",
+           res, http_code, response.data ? response.data : "(null)");
 
     if (res == CURLE_OK && http_code == 200 && response.data) {
         // Parse JSON response: {"status": "configured"|"staged", "message": "...", "needs_replacement": bool}

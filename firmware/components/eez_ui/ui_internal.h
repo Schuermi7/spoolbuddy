@@ -150,6 +150,46 @@ extern int ota_check_for_update(void);
 extern int ota_start_update(void);
 
 // =============================================================================
+// Spool API Types and Functions (implemented in Rust)
+// =============================================================================
+
+// Spool info from backend inventory
+typedef struct {
+    char id[64];            // Spool UUID
+    char tag_id[32];        // NFC tag UID
+    char brand[32];         // Vendor/brand name
+    char material[16];      // Material type (PLA, PETG, etc.)
+    char subtype[32];       // Material subtype (Basic, Matte, etc.)
+    char color_name[32];    // Color name
+    uint32_t color_rgba;    // RGBA packed color
+    int32_t label_weight;   // Label weight in grams
+    char slicer_filament[32]; // Slicer filament ID
+    bool valid;             // True if spool was found
+} SpoolInfoC;
+
+// K-profile (pressure advance calibration) for a spool
+typedef struct {
+    int32_t cali_idx;       // Calibration index (-1 if not found)
+    char k_value[16];       // K-factor value as string
+    char name[64];          // Profile name
+    char printer_serial[32]; // Printer serial this profile is for
+} SpoolKProfileC;
+
+// Assign result enum
+// 0 = Error, 1 = Configured, 2 = Staged, 3 = StagedReplace
+typedef enum {
+    ASSIGN_RESULT_ERROR = 0,
+    ASSIGN_RESULT_CONFIGURED = 1,
+    ASSIGN_RESULT_STAGED = 2,
+    ASSIGN_RESULT_STAGED_REPLACE = 3,
+} AssignResult;
+
+// Spool inventory functions
+extern bool spool_get_by_tag(const char *tag_id, SpoolInfoC *info);
+extern bool spool_get_k_profile_for_printer(const char *spool_id, const char *printer_serial, SpoolKProfileC *profile);
+extern int backend_assign_spool_to_tray(const char *printer_serial, int ams_id, int tray_id, const char *spool_id);
+
+// =============================================================================
 // Programmatic Screen IDs (beyond EEZ-generated screens)
 // =============================================================================
 
@@ -259,6 +299,7 @@ void cleanup_splash_screen(void);
 void update_backend_ui(void);
 void wire_printer_dropdown(void);
 void wire_ams_printer_dropdown(void);
+void wire_scan_printer_dropdown(void);
 void init_main_screen_ams(void);      // Hide static AMS content immediately on screen load
 int get_selected_printer_index(void);
 bool is_selected_printer_dual_nozzle(void);
@@ -277,9 +318,13 @@ void update_firmware_ui(void);
 // =============================================================================
 
 void ui_scan_result_init(void);
+void ui_scan_result_refresh_ams(void);
 void ui_scan_result_update(void);
+void ui_scan_result_wire_assign_button(void);
 int ui_scan_result_get_selected_ams(void);
 int ui_scan_result_get_selected_slot(void);
+bool ui_scan_result_can_assign(void);
+const char *ui_scan_result_get_tag_id(void);
 
 // =============================================================================
 // Module Functions - ui_core.c (wiring)

@@ -154,7 +154,7 @@ impl Nau7802State {
             initialized: false,
             last_raw: 0,
             weight_grams: 0.0,
-            filter_alpha: 0.1, // Smooth filtering
+            filter_alpha: 0.25, // Moderate filtering - balance between smoothness and response
             stable: false,
             stable_count: 0,
         }
@@ -199,8 +199,8 @@ pub fn init(i2c: &mut I2cDriver<'_>, state: &mut Nau7802State) -> Result<(), Nau
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
-    // Configure sample rate (80 SPS for responsive readings)
-    set_sample_rate(i2c, SampleRate::Sps80)?;
+    // Configure sample rate (10 SPS for stable readings - chip does internal averaging)
+    set_sample_rate(i2c, SampleRate::Sps10)?;
 
     // Configure gain (128x for load cells)
     set_gain(i2c, Gain::X128)?;
@@ -287,15 +287,22 @@ pub fn read_weight(i2c: &mut I2cDriver<'_>, state: &mut Nau7802State) -> Result<
     // Store previous weight for stability check
     let prev_weight = state.weight_grams;
 
-    // Apply exponential moving average filter
-    state.weight_grams = state.weight_grams * (1.0 - state.filter_alpha) + weight * state.filter_alpha;
+    // Quick settle: if weight changed significantly (>50g), jump closer to new value
+    let weight_change = (weight - state.weight_grams).abs();
+    if weight_change > 50.0 {
+        // Large change detected - use stronger alpha for faster response
+        state.weight_grams = state.weight_grams * 0.3 + weight * 0.7;
+    } else {
+        // Normal filtering
+        state.weight_grams = state.weight_grams * (1.0 - state.filter_alpha) + weight * state.filter_alpha;
+    }
 
-    // Check stability (within 2g of previous reading)
-    // Using 2g threshold to match realistic load cell noise levels
+    // Check stability (within 10g of previous reading)
+    // Increased threshold due to noisy hardware
     let diff = (state.weight_grams - prev_weight).abs();
-    if diff < 2.0 {
+    if diff < 10.0 {
         state.stable_count = state.stable_count.saturating_add(1);
-        if state.stable_count >= 5 {
+        if state.stable_count >= 10 {
             state.stable = true;
         }
     } else {
@@ -308,53 +315,139 @@ pub fn read_weight(i2c: &mut I2cDriver<'_>, state: &mut Nau7802State) -> Result<
 
 /// Tare the scale (set current weight as zero)
 pub fn tare(i2c: &mut I2cDriver<'_>, state: &mut Nau7802State) -> Result<(), Nau7802Error> {
-    info!("Taring scale...");
+    info!("=== SCALE TARE START ===");
+    info!("  Current zero_offset: {}", state.calibration.zero_offset);
+    info!("  Current cal_factor: {}", state.calibration.cal_factor);
 
-    // Take average of multiple readings
-    let mut sum: i64 = 0;
-    let samples = 10;
+    // Wait for scale to settle before sampling
+    info!("  Waiting for scale to settle (1 second)...");
+    std::thread::sleep(std::time::Duration::from_millis(1000));
 
-    for _ in 0..samples {
+    // Take samples for averaging (reduced to avoid watchdog)
+    let samples = 30;
+    let mut readings = [0i32; 30];
+
+    for i in 0..samples {
         // Wait for data ready
         while !data_ready(i2c)? {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        sum += read_raw(i2c, state)? as i64;
+        readings[i] = read_raw(i2c, state)?;
     }
 
-    state.calibration.zero_offset = (sum / samples as i64) as i32;
-    state.weight_grams = 0.0;
+    info!("  Raw readings: min={}, max={}, range={}",
+          readings.iter().min().unwrap(),
+          readings.iter().max().unwrap(),
+          readings.iter().max().unwrap() - readings.iter().min().unwrap());
 
-    info!("  Tare complete, zero offset: {}", state.calibration.zero_offset);
+    // Sort readings for trimmed mean (discard highest and lowest 5 values)
+    readings.sort();
+    let trim = 5;
+    let trimmed = &readings[trim..samples - trim];
+
+    // Calculate average of trimmed values
+    let sum: i64 = trimmed.iter().map(|&x| x as i64).sum();
+    let count = trimmed.len() as i64;
+
+    let new_zero_offset = (sum / count) as i32;
+    info!("  NEW zero_offset: {} (from {} middle samples)", new_zero_offset, count);
+
+    // Sanity check: range shouldn't be too extreme
+    let range = readings.iter().max().unwrap() - readings.iter().min().unwrap();
+    if range > 100000 {
+        warn!("  Warning: readings are very noisy (range={}), tare may be inaccurate", range);
+    }
+
+    state.calibration.zero_offset = new_zero_offset;
+
+    // Reset filtered state
+    state.weight_grams = 0.0;
+    state.stable = false;
+    state.stable_count = 0;
+
+    info!("=== TARE COMPLETE ===");
+    info!("  Final zero_offset: {}", state.calibration.zero_offset);
+    info!("  Final cal_factor: {}", state.calibration.cal_factor);
     Ok(())
 }
 
 /// Calibrate with a known weight
 pub fn calibrate(i2c: &mut I2cDriver<'_>, state: &mut Nau7802State, known_weight_grams: f32) -> Result<(), Nau7802Error> {
-    info!("Calibrating scale with {} grams...", known_weight_grams);
+    info!("=== SCALE CALIBRATION START ===");
+    info!("  Known weight: {} grams", known_weight_grams);
+    info!("  Current zero_offset: {}", state.calibration.zero_offset);
+    info!("  Current cal_factor: {}", state.calibration.cal_factor);
 
-    // Take average of multiple readings
-    let mut sum: i64 = 0;
-    let samples = 10;
+    // Wait for scale to settle before sampling
+    info!("  Waiting for scale to settle (1 second)...");
+    std::thread::sleep(std::time::Duration::from_millis(1000));
 
-    for _ in 0..samples {
+    // Take samples for averaging (reduced to avoid watchdog)
+    let samples = 30;
+    let mut readings = [0i32; 30];
+
+    for i in 0..samples {
         while !data_ready(i2c)? {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        sum += read_raw(i2c, state)? as i64;
+        readings[i] = read_raw(i2c, state)?;
     }
 
-    let avg_raw = (sum / samples as i64) as i32;
-    let delta = avg_raw - state.calibration.zero_offset;
+    info!("  Raw readings: min={}, max={}, range={}",
+          readings.iter().min().unwrap(),
+          readings.iter().max().unwrap(),
+          readings.iter().max().unwrap() - readings.iter().min().unwrap());
 
-    if delta.abs() < 100 {
-        warn!("  Calibration failed: weight too close to zero");
+    // Sort readings for trimmed mean (discard highest and lowest 5 values)
+    readings.sort();
+    let trim = 5;
+    let trimmed = &readings[trim..samples - trim];
+
+    // Calculate average of trimmed values
+    let sum: i64 = trimmed.iter().map(|&x| x as i64).sum();
+    let count = trimmed.len() as i64;
+    let avg_raw = (sum / count) as i32;
+
+    info!("  Average raw value (trimmed): {} (from {} middle samples)", avg_raw, count);
+
+    let delta = avg_raw - state.calibration.zero_offset;
+    info!("  Delta from zero: {} (avg_raw {} - zero_offset {})",
+          delta, avg_raw, state.calibration.zero_offset);
+
+    // Delta must be positive and significant
+    // A 797g weight should produce ~195,000 units of delta with proper calibration
+    // Require at least 10,000 to ensure meaningful signal
+    if delta < 10000 {
+        if delta < 0 {
+            warn!("  Calibration FAILED: negative delta ({}) - weight decreased readings!", delta);
+            warn!("  This usually means: load cell wiring issue, defective load cell, or not mounted correctly");
+        } else {
+            warn!("  Calibration FAILED: delta too small ({}) - no significant weight detected", delta);
+        }
         return Err(Nau7802Error::CalibrationFailed);
     }
 
-    state.calibration.cal_factor = delta as f32 / known_weight_grams;
+    let new_cal_factor = delta as f32 / known_weight_grams;
+    info!("  NEW cal_factor: {} = {} / {}", new_cal_factor, delta, known_weight_grams);
 
-    info!("  Calibration complete, factor: {}", state.calibration.cal_factor);
+    // Sanity check cal_factor - should be reasonable (50-500 for typical 5kg load cell)
+    if new_cal_factor < 10.0 || new_cal_factor > 2000.0 {
+        warn!("  Calibration FAILED: cal_factor {} is out of reasonable range (10-2000)", new_cal_factor);
+        return Err(Nau7802Error::CalibrationFailed);
+    }
+
+    state.calibration.cal_factor = new_cal_factor;
+
+    // Reset filtered state
+    state.weight_grams = known_weight_grams;
+    state.stable = false;
+    state.stable_count = 0;
+
+    info!("=== CALIBRATION COMPLETE ===");
+    info!("  Final zero_offset: {}", state.calibration.zero_offset);
+    info!("  Final cal_factor: {}", state.calibration.cal_factor);
+    info!("  Expected weight with current raw: {} grams",
+          (avg_raw - state.calibration.zero_offset) as f32 / state.calibration.cal_factor);
     Ok(())
 }
 

@@ -233,6 +233,12 @@ void wire_scan_result_buttons(void) {
         lv_obj_add_flag(objects.scan_screen_top_bar_icon_back, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(objects.scan_screen_top_bar_icon_back, back_click_handler, LV_EVENT_CLICKED, NULL);
     }
+
+    // Printer dropdown
+    wire_scan_printer_dropdown();
+
+    // Assign button
+    ui_scan_result_wire_assign_button();
 }
 
 void wire_spool_details_buttons(void) {
@@ -432,9 +438,9 @@ void ui_tick() {
             ui_nfc_card_update();
         }
 
-        // Update NFC status and weight on scan_result screen
+        // Update weight display on scan_result screen
+        // Note: ui_scan_result_init() handles NFC status panel, don't call ui_nfc_update() here
         if (screen_id == SCREEN_ID_SCAN_RESULT) {
-            ui_nfc_update();
             ui_scan_result_update();
         }
 

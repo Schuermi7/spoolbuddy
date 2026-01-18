@@ -40,6 +40,13 @@ uint32_t display_get_tick_ms(void);
  */
 void display_set_backlight_hw(uint8_t brightness_percent);
 
+/**
+ * Shutdown display before reboot
+ * Properly deinitializes the LCD panel to prevent display shift on soft restart
+ * Call this before esp_restart() to ensure clean reinitialization
+ */
+void display_shutdown(void);
+
 #ifdef __cplusplus
 }
 #endif

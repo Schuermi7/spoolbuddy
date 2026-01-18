@@ -510,3 +510,34 @@ uint32_t display_get_tick_ms(void)
 {
     return tick_get_cb();
 }
+
+/**
+ * Shutdown display before reboot
+ * Properly deinitializes the LCD panel to prevent display shift on soft restart
+ */
+void display_shutdown(void)
+{
+    ESP_LOGI(TAG, "Shutting down display...");
+
+    // Turn off backlight first
+    gpio_set_level(PIN_BACKLIGHT1, 0);
+
+    // Turn off display
+    if (panel_handle != NULL) {
+        esp_lcd_panel_disp_on_off(panel_handle, false);
+        vTaskDelay(pdMS_TO_TICKS(50));
+
+        // Reset the panel to put it in a known state
+        esp_lcd_panel_reset(panel_handle);
+        vTaskDelay(pdMS_TO_TICKS(50));
+
+        // Delete the panel to fully release all resources
+        esp_lcd_panel_del(panel_handle);
+        panel_handle = NULL;
+    }
+
+    // Short delay to let everything settle
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ESP_LOGI(TAG, "Display shutdown complete");
+}

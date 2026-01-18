@@ -564,7 +564,9 @@ static void scale_cal_timer_cb(lv_timer_t *timer) {
             scale_cal_weight_initialized = true;
 
             char str[64];
-            snprintf(str, sizeof(str), "Current: %.1f g", weight);
+            int weight_int = (int)weight;
+            if (weight_int < 0) weight_int = 0;
+            snprintf(str, sizeof(str), "Current: %d g", weight_int);
             lv_label_set_text(scale_cal_weight_label, str);
         }
         // Always show weight in yellow for visibility

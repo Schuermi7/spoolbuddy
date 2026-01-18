@@ -1118,8 +1118,13 @@ fn main() {
                 backend_client::poll_backend();
             }
         } else if loop_count % 400 == 0 {
-            // Regular polling every 2 seconds
+            // Regular polling every 2 seconds (full sync: printers, commands, etc.)
             backend_client::poll_backend();
+        } else if loop_count % 100 == 0 {
+            // Weight-only update every 500ms for faster UI feedback
+            let weight = scale_manager::scale_get_weight();
+            let stable = scale_manager::scale_is_stable();
+            backend_client::send_device_state(None, weight, stable);
         }
 
         // OTA check on startup (once, after WiFi init) - check but don't auto-install

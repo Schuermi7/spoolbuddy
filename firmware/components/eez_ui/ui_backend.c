@@ -27,6 +27,9 @@ static const char *TAG = "ui_backend";
 extern int16_t currentScreen;
 // Printers list update (from ui_printer.c)
 extern void update_printers_list(void);
+// Scan result screen functions (from ui_scan_result.c)
+extern void ui_scan_result_init(void);
+extern void ui_scan_result_refresh_ams(void);
 #endif
 
 // Update counter for rate limiting UI updates
@@ -2465,6 +2468,33 @@ void wire_printer_dropdown(void) {
 void wire_ams_printer_dropdown(void) {
     if (objects.ams_screen_top_bar_printer_select) {
         lv_obj_add_event_cb(objects.ams_screen_top_bar_printer_select, printer_dropdown_changed,
+                           LV_EVENT_VALUE_CHANGED, NULL);
+    }
+}
+
+/**
+ * @brief Printer dropdown handler for scan result screen
+ *
+ * Same as printer_dropdown_changed but also refreshes the AMS assign display.
+ */
+static void scan_printer_dropdown_changed(lv_event_t *e) {
+    // First, handle the standard printer selection logic
+    printer_dropdown_changed(e);
+
+    // Then refresh the scan result screen's AMS display (preserves tag data)
+    ui_scan_result_refresh_ams();
+
+    ESP_LOGI(TAG, "Scan screen printer changed, refreshed AMS display");
+}
+
+/**
+ * @brief Wire up printer dropdown on scan result (AMS assign) screen
+ *
+ * Called from wire_scan_result_buttons() in ui_core.c
+ */
+void wire_scan_printer_dropdown(void) {
+    if (objects.scan_screen_top_bar_printer_select) {
+        lv_obj_add_event_cb(objects.scan_screen_top_bar_printer_select, scan_printer_dropdown_changed,
                            LV_EVENT_VALUE_CHANGED, NULL);
     }
 }

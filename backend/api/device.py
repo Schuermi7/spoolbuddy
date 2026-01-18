@@ -248,6 +248,18 @@ async def scale_calibrate(known_weight: float):
     return {"success": True, "message": f"Calibrate command queued (known weight: {known_weight}g)"}
 
 
+@router.post("/scale/reset")
+async def scale_reset():
+    """Reset scale calibration to defaults."""
+    from main import is_display_connected, queue_display_command
+
+    if not is_display_connected():
+        raise HTTPException(status_code=400, detail="No device connected")
+
+    queue_display_command("scale_reset")
+    return {"success": True, "message": "Scale calibration reset command queued"}
+
+
 class RecoveryInfo(BaseModel):
     """USB recovery information."""
     steps: List[str]

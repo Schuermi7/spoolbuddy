@@ -13,10 +13,7 @@
 extern bool nfc_is_initialized(void);
 extern bool nfc_tag_present(void);
 
-// Staging state (from backend) - USE THIS for popup, not raw tag detection
-extern bool staging_is_active(void);
-extern float staging_get_remaining(void);
-extern void staging_clear(void);
+// NFC UID function
 extern uint8_t nfc_get_uid_hex(uint8_t *buf, uint8_t buf_len);
 
 // Decoded tag data (Rust FFI on ESP32, mock on simulator)
@@ -51,7 +48,7 @@ typedef struct {
     bool valid;
 } SpoolInfo;
 
-extern bool spool_get_by_tag(const char *tag_id, SpoolInfo *info);
+extern bool spool_get_by_tag_full(const char *tag_id, SpoolInfo *info);
 extern bool spool_add_to_inventory(const char *tag_id, const char *vendor, const char *material,
                                     const char *subtype, const char *color_name, uint32_t color_rgba,
                                     int label_weight, int weight_current, const char *data_origin,
@@ -82,8 +79,8 @@ extern enum ScreensEnum pendingScreen;
 
 // Static state
 static bool last_tag_present = false;
-static bool popup_dismissed_for_current_tag = false;  // Prevents reopening after Add
-static char last_tag_uid[32] = "";  // Track current tag UID to detect tag changes
+static uint8_t popup_tag_uid[32] = {0};  // UID of tag that opened the popup
+static bool popup_user_closed = false;    // User manually closed the popup
 
 // Link spool modal state
 static lv_obj_t *link_spool_modal = NULL;
@@ -101,12 +98,12 @@ static void create_link_spool_modal(const char *tag_id, const char *tag_type);
 static lv_obj_t *tag_popup = NULL;
 static lv_obj_t *popup_tag_label = NULL;
 static lv_obj_t *popup_weight_label = NULL;
-static lv_obj_t *popup_clear_btn_label = NULL;  // For updating countdown
 static lv_timer_t *close_timer = NULL;
 
 // Button click handlers
 static void popup_close_handler(lv_event_t *e) {
     (void)e;
+    popup_user_closed = true;  // Remember user closed it
     if (tag_popup) {
         lv_obj_delete(tag_popup);
         tag_popup = NULL;
@@ -121,15 +118,6 @@ static void configure_ams_click_handler(lv_event_t *e) {
     popup_close_handler(NULL);
     // Navigate to scan_result screen (Encode Tag)
     pendingScreen = SCREEN_ID_SCAN_RESULT;
-}
-
-static void clear_staging_click_handler(lv_event_t *e) {
-    (void)e;
-    printf("[ui_nfc_card] Clear staging button clicked\n");
-    // Clear staging via backend API
-    staging_clear();
-    // Close popup
-    close_popup();
 }
 
 // Timer callback to close popup after showing feedback
@@ -190,7 +178,7 @@ static void add_spool_click_handler(lv_event_t *e) {
         }
 
         // Prevent popup from reopening while tag still present
-        popup_dismissed_for_current_tag = true;
+        popup_user_closed = true;
 
         // Close popup after 800ms so user sees the feedback
         close_timer = lv_timer_create(close_popup_timer_cb, 800, NULL);
@@ -212,7 +200,6 @@ static void close_popup(void) {
         tag_popup = NULL;
         popup_tag_label = NULL;
         popup_weight_label = NULL;
-        popup_clear_btn_label = NULL;
     }
 }
 
@@ -445,9 +432,11 @@ static void create_link_spool_modal(const char *tag_id, const char *tag_type) {
 static void create_tag_popup(void) {
     if (tag_popup) return;  // Already open
 
-    // Get tag UID
+    // Get tag UID and store it
     uint8_t uid_str[32];
     nfc_get_uid_hex(uid_str, sizeof(uid_str));
+    strncpy((char*)popup_tag_uid, (char*)uid_str, sizeof(popup_tag_uid) - 1);
+    popup_tag_uid[sizeof(popup_tag_uid) - 1] = '\0';
 
     // Get weight
     float weight = scale_get_weight();
@@ -481,6 +470,21 @@ static void create_tag_popup(void) {
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(card, NULL, LV_EVENT_CLICKED, NULL);  // Absorb click
 
+    // Close button (top-right corner)
+    lv_obj_t *close_btn = lv_btn_create(card);
+    lv_obj_set_size(close_btn, 32, 32);
+    lv_obj_align(close_btn, LV_ALIGN_TOP_RIGHT, 5, -5);
+    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x444444), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(close_btn, 255, LV_PART_MAIN);
+    lv_obj_set_style_radius(close_btn, 16, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(close_btn, 0, LV_PART_MAIN);
+    lv_obj_add_event_cb(close_btn, popup_close_handler, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *close_x_label = lv_label_create(close_btn);
+    lv_label_set_text(close_x_label, LV_SYMBOL_CLOSE);
+    lv_obj_set_style_text_color(close_x_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+    lv_obj_center(close_x_label);
+
     // Title
     lv_obj_t *title = lv_label_create(card);
     lv_label_set_text(title, "NFC Tag Detected");
@@ -490,7 +494,7 @@ static void create_tag_popup(void) {
 
     // Check if tag is already in inventory
     SpoolInfo inventory_spool = {0};
-    bool tag_in_inventory = spool_get_by_tag((const char*)uid_str, &inventory_spool);
+    bool tag_in_inventory = spool_get_by_tag_full((const char*)uid_str, &inventory_spool);
 
     // Use inventory data if available, otherwise use NFC tag data
     const char *vendor;
@@ -595,7 +599,9 @@ static void create_tag_popup(void) {
 
     char weight_str[32];
     if (scale_ok) {
-        snprintf(weight_str, sizeof(weight_str), "%dg", (int)weight);
+        int weight_int = (int)weight;
+        if (weight_int < 0) weight_int = 0;
+        snprintf(weight_str, sizeof(weight_str), "%dg", weight_int);
     } else {
         snprintf(weight_str, sizeof(weight_str), "N/A");
     }
@@ -706,20 +712,18 @@ static void create_tag_popup(void) {
     lv_obj_set_style_text_color(ams_label, tag_in_inventory ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x888888), LV_PART_MAIN);
     lv_obj_center(ams_label);
 
-    // "Clear" button - clears staging and closes popup (shows countdown)
-    lv_obj_t *btn_clear = lv_btn_create(btn_container);
-    lv_obj_set_size(btn_clear, btn_width, 42);
-    lv_obj_set_style_bg_color(btn_clear, lv_color_hex(0x666666), LV_PART_MAIN);
-    lv_obj_set_style_radius(btn_clear, 8, LV_PART_MAIN);
-    lv_obj_add_flag(btn_clear, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(btn_clear, clear_staging_click_handler, LV_EVENT_CLICKED, NULL);
+    // "Close" button - closes the popup
+    lv_obj_t *btn_close = lv_btn_create(btn_container);
+    lv_obj_set_size(btn_close, btn_width, 42);
+    lv_obj_set_style_bg_color(btn_close, lv_color_hex(0x666666), LV_PART_MAIN);
+    lv_obj_set_style_radius(btn_close, 8, LV_PART_MAIN);
+    lv_obj_add_flag(btn_close, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn_close, popup_close_handler, LV_EVENT_CLICKED, NULL);
 
-    popup_clear_btn_label = lv_label_create(btn_clear);
-    char clear_text[32];
-    snprintf(clear_text, sizeof(clear_text), "Clear (%.0fs)", staging_get_remaining());
-    lv_label_set_text(popup_clear_btn_label, clear_text);
-    lv_obj_set_style_text_font(popup_clear_btn_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_center(popup_clear_btn_label);
+    lv_obj_t *close_label = lv_label_create(btn_close);
+    lv_label_set_text(close_label, "Close");
+    lv_obj_set_style_text_font(close_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_center(close_label);
 }
 
 // Update weight display in popup if open
@@ -742,6 +746,8 @@ static void update_popup_weight(void) {
 
 void ui_nfc_card_init(void) {
     last_tag_present = false;
+    popup_user_closed = false;
+    memset(popup_tag_uid, 0, sizeof(popup_tag_uid));
     close_popup();
 }
 
@@ -749,67 +755,52 @@ void ui_nfc_card_cleanup(void) {
     close_popup();
     close_link_spool_modal();
     last_tag_present = false;
-    last_tag_uid[0] = '\0';
+    popup_user_closed = false;
+    memset(popup_tag_uid, 0, sizeof(popup_tag_uid));
 }
 
 void ui_nfc_card_update(void) {
     if (!nfc_is_initialized()) return;
 
-    // Use STAGING state for popup control, NOT raw tag detection
-    // Staging is more stable - persists for 300s even if NFC reads are flaky
-    bool staging_active = staging_is_active();
+    bool tag_present = nfc_tag_present();
 
-    // Get current tag UID to detect tag changes while staging remains active
-    char current_uid[32] = "";
-    if (staging_active) {
-        nfc_get_uid_hex((uint8_t*)current_uid, sizeof(current_uid));
+    // Get current tag UID
+    uint8_t current_uid[32] = {0};
+    if (tag_present) {
+        nfc_get_uid_hex(current_uid, sizeof(current_uid));
     }
 
-    // Check if tag UID changed (new tag placed while popup open)
-    bool tag_changed = staging_active && last_tag_present &&
-                       current_uid[0] && last_tag_uid[0] &&
-                       strcmp(current_uid, last_tag_uid) != 0;
+    // Tag detected
+    if (tag_present) {
+        // Check if this is a different tag than the one that opened the popup
+        bool is_different_tag = (strcmp((char*)current_uid, (char*)popup_tag_uid) != 0);
 
-    if (tag_changed) {
-        printf("[ui_nfc_card] Tag UID changed: %s -> %s, recreating popup\n",
-               last_tag_uid, current_uid);
-        // Close old popup and show new one with updated data
-        close_popup();
-        popup_dismissed_for_current_tag = false;
-        strncpy(last_tag_uid, current_uid, sizeof(last_tag_uid) - 1);
-        create_tag_popup();
-    }
-    // Staging state changed
-    else if (staging_active != last_tag_present) {
-        printf("[ui_nfc_card] Staging changed: %d -> %d (remaining=%.1fs)\n",
-               last_tag_present, staging_active, staging_get_remaining());
-        last_tag_present = staging_active;
-
-        if (staging_active) {
-            // Tag staged - show popup (unless dismissed for this tag)
-            strncpy(last_tag_uid, current_uid, sizeof(last_tag_uid) - 1);
-            if (!popup_dismissed_for_current_tag) {
-                printf("[ui_nfc_card] Creating popup (staging active)\n");
+        if (!tag_popup) {
+            // No popup open - check if we should open one
+            if (!popup_user_closed || is_different_tag) {
+                // Open popup for new tag or if user hasn't closed this one
+                popup_user_closed = false;  // Reset for new tag
                 create_tag_popup();
             }
-        } else {
-            // Staging expired - close popup and reset dismissed flag
-            printf("[ui_nfc_card] Closing popup (staging expired)\n");
+        } else if (is_different_tag && popup_tag_uid[0] != '\0') {
+            // Different tag detected while popup is open - update popup for new tag
             close_popup();
-            popup_dismissed_for_current_tag = false;
-            last_tag_uid[0] = '\0';
+            popup_user_closed = false;
+            create_tag_popup();
+        } else {
+            // Same tag still present - just update weight
+            update_popup_weight();
         }
-    } else if (staging_active && tag_popup) {
-        // Staging still active - update weight and countdown in popup
-        update_popup_weight();
-
-        // Update clear button countdown
-        if (popup_clear_btn_label) {
-            char clear_text[32];
-            snprintf(clear_text, sizeof(clear_text), "Clear (%.0fs)", staging_get_remaining());
-            lv_label_set_text(popup_clear_btn_label, clear_text);
+    } else {
+        // Tag removed - reset user_closed flag so next tag will show popup
+        // But DON'T close the popup - let user close it manually
+        if (last_tag_present && !tag_present) {
+            // Tag just removed - reset for next tag detection
+            popup_user_closed = false;
         }
     }
+
+    last_tag_present = tag_present;
 
     // Only update scale status labels when main screen is actually active
     // (other screens delete main screen objects, leaving stale pointers)
@@ -841,13 +832,13 @@ void ui_nfc_card_update(void) {
 
 // Show popup externally (e.g., from status bar click)
 void ui_nfc_card_show_popup(void) {
-    bool staging = staging_is_active();
-    printf("[ui_nfc_card] show_popup called: staging=%d, tag_popup=%p, dismissed=%d\n",
-           staging, (void*)tag_popup, popup_dismissed_for_current_tag);
+    bool tag_present = nfc_tag_present();
+    printf("[ui_nfc_card] show_popup called: tag_present=%d, tag_popup=%p, user_closed=%d\n",
+           tag_present, (void*)tag_popup, popup_user_closed);
 
-    if (staging && !tag_popup) {
+    if (tag_present && !tag_popup) {
         printf("[ui_nfc_card] Showing popup from external request\n");
-        popup_dismissed_for_current_tag = false;
+        popup_user_closed = false;
         create_tag_popup();
     }
 }
