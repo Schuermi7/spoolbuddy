@@ -1,6 +1,17 @@
 import { http, HttpResponse } from 'msw'
+import {
+  mockSpools as sharedMockSpools,
+  mockPrinters as sharedMockPrinters,
+  mockCalibrations,
+  mockSlicerPresets,
+  mockSettingDetail,
+  mockCloudStatus,
+  mockVersionInfo,
+  mockUpdateCheck,
+  mockDeviceStatus,
+} from './data'
 
-// Sample test data
+// Re-export mock data for backward compatibility
 export const mockSpools = [
   {
     id: 'spool-1',
@@ -70,26 +81,8 @@ export const mockPrinters = [
   },
 ]
 
-export const mockVersionInfo = {
-  version: '0.1.0',
-  git_commit: 'abc1234',
-  git_branch: 'main',
-}
-
-export const mockUpdateCheck = {
-  current_version: '0.1.0',
-  latest_version: '0.1.0',
-  update_available: false,
-  release_notes: null,
-  release_url: null,
-  published_at: null,
-  error: null,
-}
-
-export const mockCloudStatus = {
-  is_authenticated: false,
-  email: null,
-}
+// Re-export from data.ts for backward compatibility
+export { mockVersionInfo, mockUpdateCheck, mockCloudStatus, mockCalibrations }
 
 // API handlers
 export const handlers = [
@@ -169,7 +162,7 @@ export const handlers = [
   }),
 
   http.get('/api/printers/:serial/calibrations', () => {
-    return HttpResponse.json([])
+    return HttpResponse.json(mockCalibrations)
   }),
 
   // Updates
@@ -220,9 +213,48 @@ export const handlers = [
 
   http.get('/api/cloud/settings', () => {
     return HttpResponse.json({
-      filament: [],
+      filament: mockSlicerPresets,
       printer: [],
       process: [],
+    })
+  }),
+
+  http.get('/api/cloud/settings/:settingId', ({ params }) => {
+    const settingId = params.settingId as string
+    if (settingId === mockSettingDetail.setting_id) {
+      return HttpResponse.json(mockSettingDetail)
+    }
+    // For official presets, return minimal detail
+    return HttpResponse.json({
+      setting_id: settingId,
+      name: settingId,
+    })
+  }),
+
+  // AMS slot operations
+  http.post('/api/printers/:serial/ams/:amsId/tray/:trayId/filament', async ({ request }) => {
+    const body = await request.json() as Record<string, unknown>
+    // Simulate setting filament on a slot
+    return HttpResponse.json({ status: 'ok', ...body })
+  }),
+
+  http.post('/api/printers/:serial/ams/:amsId/tray/:trayId/calibration', async ({ request }) => {
+    const body = await request.json() as Record<string, unknown>
+    // Simulate setting calibration on a slot
+    return HttpResponse.json({ status: 'ok', ...body })
+  }),
+
+  http.post('/api/printers/:serial/ams/:amsId/tray/:trayId/reset', () => {
+    // Simulate RFID re-read request
+    return HttpResponse.json({ status: 'ok' })
+  }),
+
+  http.post('/api/printers/:serial/ams/:amsId/tray/:trayId/assign', async ({ request }) => {
+    const body = await request.json() as { spool_id: string }
+    return HttpResponse.json({
+      status: 'configured',
+      message: 'Spool assigned',
+      needs_replacement: false,
     })
   }),
 

@@ -50,7 +50,38 @@ async def test_db():
 
 
 @pytest.fixture
-async def async_client(test_db) -> AsyncGenerator[AsyncClient, None]:
+def mock_printer_manager():
+    """Mock the printer manager for API tests requiring MQTT."""
+    from api import printers as printers_api
+
+    manager = MagicMock()
+    manager.is_connected = MagicMock(return_value=False)
+    manager.connect = AsyncMock()
+    manager.disconnect = AsyncMock()
+    manager.get_state = MagicMock(return_value=None)
+    manager.get_connection_statuses = MagicMock(return_value={})
+    manager.set_filament = MagicMock(return_value=True)
+    manager.set_calibration = MagicMock(return_value=True)
+    manager.set_k_value = MagicMock(return_value=True)
+    manager.reset_slot = MagicMock(return_value=True)
+    manager.get_kprofiles = AsyncMock(return_value=[])
+    manager.get_nozzle_diameter = MagicMock(return_value="0.4")
+    manager.stage_assignment = MagicMock(return_value=True)
+    manager.cancel_assignment = MagicMock(return_value=True)
+    manager.get_all_pending_assignments = MagicMock(return_value={})
+
+    # Set the mock as the global printer manager
+    original = printers_api._printer_manager
+    printers_api._printer_manager = manager
+
+    yield manager
+
+    # Restore original
+    printers_api._printer_manager = original
+
+
+@pytest.fixture
+async def async_client(test_db, mock_printer_manager) -> AsyncGenerator[AsyncClient, None]:
     """Create an async test client with test database."""
     from main import app
     from db import get_db
@@ -269,3 +300,193 @@ def capture_logs():
     yield handler
 
     root_logger.removeHandler(handler)
+
+
+# ============================================================================
+# MQTT Test Fixtures
+# ============================================================================
+
+@pytest.fixture
+def sample_mqtt_report():
+    """Sample Bambu MQTT print report."""
+    return {
+        "print": {
+            "gcode_state": "RUNNING",
+            "mc_percent": 45,
+            "layer_num": 50,
+            "total_layer_num": 200,
+            "subtask_name": "test_print.gcode",
+            "mc_remaining_time": 45,
+            "gcode_file": "/sdcard/test_print.gcode",
+            "ams": {
+                "ams": [{
+                    "id": "0",
+                    "humidity": "35",
+                    "humidity_raw": "42",
+                    "temp": "25.5",
+                    "tray": [
+                        {
+                            "id": "0",
+                            "tray_type": "PLA",
+                            "tray_color": "FF0000FF",
+                            "tray_info_idx": "GFSL05",
+                            "k": 0.025,
+                            "remain": 80,
+                            "nozzle_temp_min": 190,
+                            "nozzle_temp_max": 230,
+                        },
+                        {
+                            "id": "1",
+                            "tray_type": "PETG",
+                            "tray_color": "00FF00FF",
+                            "tray_info_idx": "GFPG99",
+                            "k": 0.035,
+                            "remain": 50,
+                            "nozzle_temp_min": 220,
+                            "nozzle_temp_max": 260,
+                        },
+                        {
+                            "id": "2",
+                            "tray_type": "",
+                            "tray_color": "",
+                        },
+                        {
+                            "id": "3",
+                            "tray_type": "ABS",
+                            "tray_color": "0000FFFF",
+                            "tray_info_idx": "GFSA00",
+                            "k": 0.040,
+                            "remain": 20,
+                            "nozzle_temp_min": 240,
+                            "nozzle_temp_max": 280,
+                        },
+                    ]
+                }],
+                "tray_now": "0",
+            },
+        }
+    }
+
+
+@pytest.fixture
+def sample_dual_nozzle_report():
+    """Sample MQTT report for dual-nozzle printer (H2C/H2D).
+
+    Snow encoding: (ams_id << 8) | slot_id
+    - 0x0001 = ams 0, slot 1 -> global tray = 1
+    - 0x0102 = ams 1, slot 2 -> global tray = 6
+    """
+    return {
+        "print": {
+            "gcode_state": "RUNNING",
+            "mc_percent": 60,
+            "device": {
+                "extruder": {
+                    "info": [
+                        {"id": 0, "dia": 0.4, "snow": 1},    # Right nozzle: ams 0, slot 1
+                        {"id": 1, "dia": 0.6, "snow": 258},  # Left nozzle: ams 1, slot 2 (0x0102)
+                    ],
+                    "state": 16,  # Active extruder in bits 4-7 -> (16 >> 4) & 0xF = 1
+                }
+            },
+            "ams": {
+                "ams": [
+                    {
+                        "id": "0",
+                        "humidity": "30",
+                        "temp": "24.0",
+                        "info": "0",  # Bit 8=0 means left extruder
+                        "tray": [
+                            {"id": "0", "tray_type": "PLA", "tray_color": "FFFFFFFF"},
+                            {"id": "1", "tray_type": "PETG", "tray_color": "00FF00FF"},
+                        ],
+                    },
+                    {
+                        "id": "1",
+                        "humidity": "28",
+                        "temp": "24.5",
+                        "info": "256",  # Bit 8=1 means right extruder
+                        "tray": [
+                            {"id": "0", "tray_type": "ABS", "tray_color": "0000FFFF"},
+                            {"id": "1", "tray_type": "ASA", "tray_color": "FF00FFFF"},
+                            {"id": "2", "tray_type": "TPU", "tray_color": "FFFF00FF"},
+                        ],
+                    },
+                ],
+                "tray_now": "255",  # No legacy tray_now for dual nozzle
+            },
+        }
+    }
+
+
+@pytest.fixture
+def sample_calibration_profiles():
+    """Sample K-value calibration profiles from extrusion_cali_get."""
+    return [
+        {
+            "cali_idx": 42,
+            "name": "Bambu PLA Basic",
+            "k_value": "0.025",
+            "filament_id": "GFSL05",
+            "extruder_id": 0,
+            "setting_id": "GFSL05_07",
+        },
+        {
+            "cali_idx": 43,
+            "name": "Bambu PLA Basic",
+            "k_value": "0.025",
+            "filament_id": "GFSL05",
+            "extruder_id": 1,
+            "setting_id": "GFSL05_07",
+        },
+        {
+            "cali_idx": 44,
+            "name": "Generic PETG",
+            "k_value": "0.035",
+            "filament_id": "GFPG99",
+            "extruder_id": 0,
+            "setting_id": "GFPG99_01",
+        },
+    ]
+
+
+@pytest.fixture
+def sample_slicer_settings():
+    """Sample slicer settings from Bambu Cloud API."""
+    return {
+        "filament": {
+            "private": [
+                {
+                    "setting_id": "custom-pla-001",
+                    "name": "My Custom PLA",
+                    "version": "01.09.00.06",
+                    "user_id": "user123",
+                },
+            ],
+            "public": [
+                {
+                    "setting_id": "GFSL05_07",
+                    "name": "Bambu PLA Basic @BBL X1C",
+                    "version": "01.09.00.06",
+                },
+                {
+                    "setting_id": "GFPG99_01",
+                    "name": "Generic PETG @BBL X1C",
+                    "version": "01.09.00.06",
+                },
+            ],
+        },
+        "printer": {"private": [], "public": []},
+        "print": {"private": [], "public": []},
+    }
+
+
+@pytest.fixture
+def sample_setting_detail():
+    """Sample setting detail from Bambu Cloud API."""
+    return {
+        "setting_id": "custom-pla-001",
+        "name": "My Custom PLA @BBL X1C",
+        "filament_id": "GFSL05",
+        "base_id": "GFSL05_07",
+    }

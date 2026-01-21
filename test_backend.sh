@@ -1,5 +1,5 @@
 #!/bin/bash
 
 cd backend
-source venv/bin/activate
-pytest "$@"
+python -m pytest tests/ -v           # All tests
+cd ..

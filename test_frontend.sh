@@ -1,3 +1,5 @@
 #!/bin/sh
 
-cd frontend && npm test
+cd frontend
+npm run test:run
+cd ..
