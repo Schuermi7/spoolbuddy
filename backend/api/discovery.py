@@ -5,13 +5,12 @@ Bambu Lab printers advertise themselves via SSDP on UDP port 2021.
 """
 
 import asyncio
-import socket
 import logging
-from typing import List, Optional
+import socket
 from dataclasses import dataclass, field
-from pydantic import BaseModel
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/discovery", tags=["discovery"])
@@ -19,14 +18,16 @@ router = APIRouter(prefix="/discovery", tags=["discovery"])
 
 class DiscoveredPrinter(BaseModel):
     """Information about a discovered printer."""
+
     serial: str
-    name: Optional[str] = None
+    name: str | None = None
     ip_address: str
-    model: Optional[str] = None
+    model: str | None = None
 
 
 class DiscoveryStatus(BaseModel):
     """Status of discovery operation."""
+
     running: bool
 
 
@@ -52,13 +53,13 @@ MODEL_MAP = {
 class DiscoveryState:
     running: bool = False
     printers: dict = field(default_factory=dict)  # serial -> DiscoveredPrinter
-    task: Optional[asyncio.Task] = None
+    task: asyncio.Task | None = None
 
 
 _state = DiscoveryState()
 
 
-def parse_ssdp_response(data: bytes, addr: tuple) -> Optional[DiscoveredPrinter]:
+def parse_ssdp_response(data: bytes, addr: tuple) -> DiscoveredPrinter | None:
     """Parse SSDP response from Bambu printer.
 
     Bambu SSDP format can be either:
@@ -90,7 +91,7 @@ def parse_ssdp_response(data: bytes, addr: tuple) -> Optional[DiscoveredPrinter]
             if ":" in line:
                 idx = line.index(":")
                 key = line[:idx].strip()
-                value = line[idx + 1:].strip()
+                value = line[idx + 1 :].strip()
                 if key and value:
                     headers[key.lower()] = value
             # Also try space separator (some Bambu formats)
@@ -121,34 +122,27 @@ def parse_ssdp_response(data: bytes, addr: tuple) -> Optional[DiscoveredPrinter]
 
         # Get printer name (try multiple header variations)
         dev_name = (
-            headers.get("devname.bambu.com", "") or
-            headers.get("devname", "") or
-            headers.get("dev-name", "") or
-            headers.get("friendlyname", "")
+            headers.get("devname.bambu.com", "")
+            or headers.get("devname", "")
+            or headers.get("dev-name", "")
+            or headers.get("friendlyname", "")
         )
 
         # Get model code and map to name
         model_code = (
-            headers.get("devmodel.bambu.com", "") or
-            headers.get("devmodel", "") or
-            headers.get("dev-model", "")
+            headers.get("devmodel.bambu.com", "") or headers.get("devmodel", "") or headers.get("dev-model", "")
         )
         model = MODEL_MAP.get(model_code, model_code) if model_code else None
 
         logger.info(f"Discovered Bambu printer: serial={usn}, name={dev_name}, model={model}, ip={ip_address}")
 
-        return DiscoveredPrinter(
-            serial=usn,
-            name=dev_name if dev_name else None,
-            ip_address=ip_address,
-            model=model
-        )
+        return DiscoveredPrinter(serial=usn, name=dev_name if dev_name else None, ip_address=ip_address, model=model)
     except Exception as e:
         logger.warning(f"Failed to parse SSDP response: {e}")
         return None
 
 
-def _create_discovery_socket(port: int) -> Optional[socket.socket]:
+def _create_discovery_socket(port: int) -> socket.socket | None:
     """Create a UDP socket that listens for SSDP broadcast/multicast packets."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -188,13 +182,13 @@ def _send_msearch(sock: socket.socket):
     """Send M-SEARCH request to trigger printer responses."""
     # Bambu printers respond to M-SEARCH on port 2021
     msearch = (
-        "M-SEARCH * HTTP/1.1\r\n"
-        "HOST: 239.255.255.250:1900\r\n"
-        "MAN: \"ssdp:discover\"\r\n"
-        "MX: 3\r\n"
-        "ST: urn:bambulab-com:device:3dprinter:1\r\n"
-        "\r\n"
-    ).encode("utf-8")
+        b"M-SEARCH * HTTP/1.1\r\n"
+        b"HOST: 239.255.255.250:1900\r\n"
+        b'MAN: "ssdp:discover"\r\n'
+        b"MX: 3\r\n"
+        b"ST: urn:bambulab-com:device:3dprinter:1\r\n"
+        b"\r\n"
+    )
 
     try:
         # Send to multicast address
@@ -232,7 +226,7 @@ async def _discovery_task(timeout: float = 10.0):
             return
 
         # Send M-SEARCH requests to trigger immediate responses
-        for port, sock in sockets:
+        for _port, sock in sockets:
             _send_msearch(sock)
 
         loop = asyncio.get_event_loop()
@@ -242,11 +236,11 @@ async def _discovery_task(timeout: float = 10.0):
         while _state.running and loop.time() < end_time:
             # Re-send M-SEARCH every 2 seconds
             if loop.time() - last_msearch > 2.0:
-                for port, sock in sockets:
+                for _port, sock in sockets:
                     _send_msearch(sock)
                 last_msearch = loop.time()
 
-            for port, sock in sockets:
+            for _port, sock in sockets:
                 try:
                     # Non-blocking receive
                     data, addr = sock.recvfrom(2048)
@@ -255,7 +249,7 @@ async def _discovery_task(timeout: float = 10.0):
                         if printer and printer.serial not in _state.printers:
                             _state.printers[printer.serial] = printer
                             logger.info(f"Discovered printer: {printer.name or printer.serial} at {printer.ip_address}")
-                except socket.timeout:
+                except TimeoutError:
                     # No data available, continue
                     pass
                 except Exception as e:
@@ -267,7 +261,7 @@ async def _discovery_task(timeout: float = 10.0):
     except Exception as e:
         logger.error(f"Discovery task error: {e}")
     finally:
-        for port, sock in sockets:
+        for _port, sock in sockets:
             try:
                 sock.close()
             except Exception:
@@ -316,7 +310,7 @@ async def stop_discovery():
     return DiscoveryStatus(running=False)
 
 
-@router.get("/printers", response_model=List[DiscoveredPrinter])
+@router.get("/printers", response_model=list[DiscoveredPrinter])
 async def get_discovered_printers():
     """Get list of discovered printers."""
     return list(_state.printers.values())

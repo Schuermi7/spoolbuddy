@@ -25,9 +25,7 @@ class TestSpoolsAPI:
 
     async def test_create_spool_minimal(self, async_client):
         """Test creating a spool with minimal required fields."""
-        response = await async_client.post("/api/spools", json={
-            "material": "PLA"
-        })
+        response = await async_client.post("/api/spools", json={"material": "PLA"})
         assert response.status_code == 201
 
         data = response.json()

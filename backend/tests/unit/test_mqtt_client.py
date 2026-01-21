@@ -10,21 +10,21 @@ Tests cover:
 - Pending assignment lifecycle
 """
 
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 import json
 import time
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from models import AmsTray, AmsUnit, PrinterState
 from mqtt.client import (
+    DISCONNECT_GRACE_PERIOD_SEC,
+    STAGE_NAMES,
+    Calibration,
+    PendingAssignment,
     PrinterConnection,
     PrinterManager,
-    PendingAssignment,
-    Calibration,
     get_stage_name,
-    STAGE_NAMES,
-    DISCONNECT_GRACE_PERIOD_SEC,
 )
-from models import PrinterState, AmsUnit, AmsTray
 
 
 class TestGetStageName:
@@ -273,12 +273,14 @@ class TestParseAmsData:
         conn._state = PrinterState()
 
         ams_data = {
-            "ams": [{
-                "id": "0",
-                "humidity": 30,
-                "temp": "25.0",
-                "tray": [],
-            }],
+            "ams": [
+                {
+                    "id": "0",
+                    "humidity": 30,
+                    "temp": "25.0",
+                    "tray": [],
+                }
+            ],
             "tray_reading_bits": "0001",  # Tray 0 being read
         }
 
@@ -295,16 +297,20 @@ class TestParseAmsData:
         conn._state = PrinterState()
 
         ams_data = {
-            "ams": [{
-                "id": "128",
-                "humidity_raw": 40,
-                "temp": "28.0",
-                "tray": [{
-                    "id": "0",
-                    "tray_type": "PLA-CF",
-                    "tray_color": "808080FF",
-                }],
-            }],
+            "ams": [
+                {
+                    "id": "128",
+                    "humidity_raw": 40,
+                    "temp": "28.0",
+                    "tray": [
+                        {
+                            "id": "0",
+                            "tray_type": "PLA-CF",
+                            "tray_color": "808080FF",
+                        }
+                    ],
+                }
+            ],
         }
 
         conn._parse_ams_data(ams_data)
@@ -348,7 +354,7 @@ class TestDualNozzleSupport:
 
         # snow: 0x0001 for right (ams 0, slot 1), 0x0102 for left (ams 1, slot 2)
         assert conn._state.tray_now_right == 1  # ams 0 * 4 + slot 1
-        assert conn._state.tray_now_left == 6   # ams 1 * 4 + slot 2
+        assert conn._state.tray_now_left == 6  # ams 1 * 4 + slot 2
 
     def test_parses_active_extruder(self, sample_dual_nozzle_report):
         """Test parsing active_extruder from extruder state."""
@@ -650,15 +656,19 @@ class TestPendingAssignment:
 
         # First update: empty slot
         ams_data = {
-            "ams": [{
-                "id": "0",
-                "humidity": 30,
-                "temp": "25.0",
-                "tray": [{
+            "ams": [
+                {
                     "id": "0",
-                    "tray_type": None,  # Empty
-                }],
-            }],
+                    "humidity": 30,
+                    "temp": "25.0",
+                    "tray": [
+                        {
+                            "id": "0",
+                            "tray_type": None,  # Empty
+                        }
+                    ],
+                }
+            ],
         }
         conn._parse_ams_data(ams_data)
 
@@ -667,15 +677,19 @@ class TestPendingAssignment:
 
         # Second update: spool inserted
         ams_data = {
-            "ams": [{
-                "id": "0",
-                "humidity": 30,
-                "temp": "25.0",
-                "tray": [{
+            "ams": [
+                {
                     "id": "0",
-                    "tray_type": "PLA",  # Now has filament
-                }],
-            }],
+                    "humidity": 30,
+                    "temp": "25.0",
+                    "tray": [
+                        {
+                            "id": "0",
+                            "tray_type": "PLA",  # Now has filament
+                        }
+                    ],
+                }
+            ],
         }
         conn._parse_ams_data(ams_data)
 

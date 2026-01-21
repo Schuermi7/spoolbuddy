@@ -1,27 +1,24 @@
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
-from pydantic import BaseModel
-import asyncio
 import io
 import logging
 import re
-import tempfile
 import zipfile
-from pathlib import Path
-from PIL import Image
 
 from db import get_db
-from services.bambu_ftp import download_file_try_paths_async
-from services.bambu_cloud import get_cloud_service
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from models import (
+    AmsFilamentSettingRequest,
+    AssignSpoolRequest,
     Printer,
     PrinterCreate,
     PrinterUpdate,
     PrinterWithStatus,
-    AmsFilamentSettingRequest,
-    AssignSpoolRequest,
     SetCalibrationRequest,
 )
+from PIL import Image
+from pydantic import BaseModel
+from services.bambu_cloud import get_cloud_service
+from services.bambu_ftp import download_file_try_paths_async
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["printers"])
@@ -129,23 +126,25 @@ async def list_printers():
                 if gcode_state in ("RUNNING", "PAUSE", "PAUSED") and subtask_name:
                     cover_url = f"/api/printers/{printer.serial}/cover"
 
-        result.append(PrinterWithStatus(
-            **printer.model_dump(),
-            connected=connected,
-            gcode_state=gcode_state,
-            print_progress=print_progress,
-            subtask_name=subtask_name,
-            mc_remaining_time=mc_remaining_time,
-            cover_url=cover_url,
-            ams_units=ams_units,
-            tray_now=tray_now,
-            tray_now_left=tray_now_left,
-            tray_now_right=tray_now_right,
-            active_extruder=active_extruder,
-            stg_cur=stg_cur,
-            stg_cur_name=stg_cur_name,
-            tray_reading_bits=tray_reading_bits,
-        ))
+        result.append(
+            PrinterWithStatus(
+                **printer.model_dump(),
+                connected=connected,
+                gcode_state=gcode_state,
+                print_progress=print_progress,
+                subtask_name=subtask_name,
+                mc_remaining_time=mc_remaining_time,
+                cover_url=cover_url,
+                ams_units=ams_units,
+                tray_now=tray_now,
+                tray_now_left=tray_now_left,
+                tray_now_right=tray_now_right,
+                active_extruder=active_extruder,
+                stg_cur=stg_cur,
+                stg_cur_name=stg_cur_name,
+                tray_reading_bits=tray_reading_bits,
+            )
+        )
 
     return result
 
@@ -164,18 +163,21 @@ async def get_assignment_completions_endpoint(since: float = 0):
         List of completion events with timestamp, serial, ams_id, tray_id, spool_id, success
     """
     from main import get_assignment_completions
+
     completions = get_assignment_completions()
     result = []
     for ts, serial, ams_id, tray_id, spool_id, success in completions:
         if ts > since:
-            result.append({
-                "timestamp": ts,
-                "serial": serial,
-                "ams_id": ams_id,
-                "tray_id": tray_id,
-                "spool_id": spool_id,
-                "success": success,
-            })
+            result.append(
+                {
+                    "timestamp": ts,
+                    "serial": serial,
+                    "ams_id": ams_id,
+                    "tray_id": tray_id,
+                    "spool_id": spool_id,
+                    "success": success,
+                }
+            )
     return result
 
 
@@ -305,6 +307,7 @@ async def set_filament(serial: str, ams_id: int, tray_id: int, filament: AmsFila
 
 class AssignResponse(BaseModel):
     """Response from assign endpoint."""
+
     status: str  # "configured" or "staged"
     message: str
     needs_replacement: bool = False  # True if slot has wrong spool that needs removal
@@ -416,7 +419,9 @@ async def assign_spool_to_tray(serial: str, ams_id: int, tray_id: int, request: 
     else:
         tray_info_idx = setting_id
 
-    logger.info(f"Setting filament: slicer={slicer_filament} -> tray_info_idx={tray_info_idx}, setting_id={setting_id}, type={spool.material}, color={tray_color}")
+    logger.info(
+        f"Setting filament: slicer={slicer_filament} -> tray_info_idx={tray_info_idx}, setting_id={setting_id}, type={spool.material}, color={tray_color}"
+    )
 
     # Look up K-profile for this spool, printer, and nozzle diameter
     nozzle_diameter = _printer_manager.get_nozzle_diameter(serial)
@@ -427,17 +432,20 @@ async def assign_spool_to_tray(serial: str, ams_id: int, tray_id: int, request: 
         # Match by printer and nozzle diameter
         if kp.get("printer_serial") == serial and kp.get("nozzle_diameter") == nozzle_diameter:
             matching_cali_idx = kp.get("cali_idx", -1)
-            logger.info(f"Found matching K-profile for spool {request.spool_id}: cali_idx={matching_cali_idx}, name={kp.get('name')}")
+            logger.info(
+                f"Found matching K-profile for spool {request.spool_id}: cali_idx={matching_cali_idx}, name={kp.get('name')}"
+            )
             break
 
     if matching_cali_idx == -1:
-        logger.info(f"No matching K-profile found for spool {request.spool_id} on printer {serial} with nozzle {nozzle_diameter}")
+        logger.info(
+            f"No matching K-profile found for spool {request.spool_id} on printer {serial} with nozzle {nozzle_diameter}"
+        )
 
     # Check if tray has a spool and if it matches the one we're assigning
     state = _printer_manager.get_state(serial)
     tray_has_spool = False
     tray_matches_spool = False
-    current_tray_info = None
 
     if state:
         for unit in state.ams_units:
@@ -446,7 +454,6 @@ async def assign_spool_to_tray(serial: str, ams_id: int, tray_id: int, request: 
                     if tray.tray_id == tray_id:
                         if tray.tray_type:
                             tray_has_spool = True
-                            current_tray_info = tray
 
                             # Check if current tray matches spool being assigned
                             # Compare tray_info_idx (Bambu preset ID) if available
@@ -462,16 +469,17 @@ async def assign_spool_to_tray(serial: str, ams_id: int, tray_id: int, request: 
 
                             # Match if preset ID matches OR (material AND color match)
                             if tray_info_idx and current_info_idx:
-                                tray_matches_spool = (current_info_idx == tray_info_idx)
+                                tray_matches_spool = current_info_idx == tray_info_idx
                             else:
                                 # Fallback: compare material and color
-                                tray_matches_spool = (current_type == target_type and
-                                                      current_color == target_color)
+                                tray_matches_spool = current_type == target_type and current_color == target_color
 
-                            logger.info(f"Tray comparison: current_idx={current_info_idx}, target_idx={tray_info_idx}, "
-                                        f"current_type={current_type}, target_type={target_type}, "
-                                        f"current_color={current_color}, target_color={target_color}, "
-                                        f"matches={tray_matches_spool}")
+                            logger.info(
+                                f"Tray comparison: current_idx={current_info_idx}, target_idx={tray_info_idx}, "
+                                f"current_type={current_type}, target_type={target_type}, "
+                                f"current_color={current_color}, target_color={target_color}, "
+                                f"matches={tray_matches_spool}"
+                            )
                         break
 
     if tray_has_spool and tray_matches_spool:
@@ -607,13 +615,15 @@ async def get_pending_assignments(serial: str):
     pending = _printer_manager.get_all_pending_assignments(serial)
     result = []
     for (ams_id, tray_id), assignment in pending.items():
-        result.append({
-            "ams_id": ams_id,
-            "tray_id": tray_id,
-            "spool_id": assignment.spool_id,
-            "tray_type": assignment.tray_type,
-            "tray_color": assignment.tray_color,
-        })
+        result.append(
+            {
+                "ams_id": ams_id,
+                "tray_id": tray_id,
+                "spool_id": assignment.spool_id,
+                "tray_type": assignment.tray_type,
+                "tray_color": assignment.tray_color,
+            }
+        )
     return result
 
 
@@ -702,6 +712,7 @@ async def get_calibrations(serial: str, nozzle_diameter: str = "0.4"):
     Uses async request with retry logic to reliably fetch profiles from printer.
     """
     import logging
+
     logger = logging.getLogger(__name__)
 
     if not _printer_manager:
@@ -786,10 +797,7 @@ async def get_printer_cover(serial: str, format: str = "rgb565"):
     )
 
     if not data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Could not download 3MF file '{filename}' from printer"
-        )
+        raise HTTPException(status_code=404, detail=f"Could not download 3MF file '{filename}' from printer")
 
     # Extract thumbnail from 3MF (ZIP file)
     try:
@@ -856,6 +864,7 @@ async def get_printer_cover(serial: str, format: str = "rgb565"):
 
 class AMSHistoryResponse(BaseModel):
     """Response for AMS sensor history."""
+
     printer_serial: str
     ams_id: int
     data: list[dict]

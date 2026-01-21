@@ -37,9 +37,7 @@ class ImplicitFTP_TLS(FTP_TLS):
             self.source_address = source_address
 
         # Create and wrap socket immediately (implicit TLS)
-        self.sock = socket.create_connection(
-            (self.host, self.port), self.timeout, source_address=self.source_address
-        )
+        self.sock = socket.create_connection((self.host, self.port), self.timeout, source_address=self.source_address)
         self.sock = self.ssl_context.wrap_socket(self.sock, server_hostname=self.host)
         self.af = self.sock.family
         self.file = self.sock.makefile("r", encoding=self.encoding)
@@ -138,7 +136,7 @@ async def download_file_bytes_async(
 
     try:
         return await asyncio.wait_for(loop.run_in_executor(None, _download), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(f"FTP download timed out after {timeout}s for {remote_path}")
         return None
 
@@ -164,6 +162,6 @@ async def download_file_try_paths_async(
 
     try:
         return await asyncio.wait_for(loop.run_in_executor(None, _download), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(f"FTP download timed out after {timeout}s")
         return None

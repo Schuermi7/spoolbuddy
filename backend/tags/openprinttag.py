@@ -33,7 +33,6 @@ Material type enum:
 
 import base64
 import logging
-from typing import Optional, List
 
 from .models import OpenPrintTagData, SpoolFromTag, TagType
 
@@ -41,10 +40,46 @@ logger = logging.getLogger(__name__)
 
 # Material type enum mapping
 MATERIAL_TYPES = [
-    "PLA", "PETG", "TPU", "ABS", "ASA", "PC", "PCTG", "PP", "PA6", "PA11",
-    "PA12", "PA66", "CPE", "TPE", "HIPS", "PHA", "PET", "PEI", "PBT", "PVB",
-    "PVA", "PEKK", "PEEK", "BVOH", "TPC", "PPS", "PPSU", "PVC", "PEBA", "PVDF",
-    "PPA", "PCL", "PES", "PMMA", "POM", "PPE", "PS", "PSU", "TPI", "SBS",
+    "PLA",
+    "PETG",
+    "TPU",
+    "ABS",
+    "ASA",
+    "PC",
+    "PCTG",
+    "PP",
+    "PA6",
+    "PA11",
+    "PA12",
+    "PA66",
+    "CPE",
+    "TPE",
+    "HIPS",
+    "PHA",
+    "PET",
+    "PEI",
+    "PBT",
+    "PVB",
+    "PVA",
+    "PEKK",
+    "PEEK",
+    "BVOH",
+    "TPC",
+    "PPS",
+    "PPSU",
+    "PVC",
+    "PEBA",
+    "PVDF",
+    "PPA",
+    "PCL",
+    "PES",
+    "PMMA",
+    "POM",
+    "PPE",
+    "PS",
+    "PSU",
+    "TPI",
+    "SBS",
 ]
 
 # Slicer filament code mapping
@@ -76,7 +111,7 @@ class OpenPrintTagDecoder:
         return False
 
     @staticmethod
-    def decode(uid_hex: str, ndef_payload: bytes) -> Optional[OpenPrintTagData]:
+    def decode(uid_hex: str, ndef_payload: bytes) -> OpenPrintTagData | None:
         """Decode OpenPrintTag CBOR payload.
 
         Args:
@@ -125,7 +160,7 @@ class OpenPrintTagDecoder:
             empty_weight = main_data.get(18)
 
             # Colors (stored as bytes)
-            def parse_color(color_bytes: Optional[bytes]) -> Optional[str]:
+            def parse_color(color_bytes: bytes | None) -> str | None:
                 if not color_bytes:
                     return None
                 if len(color_bytes) == 3:
@@ -166,9 +201,7 @@ class OpenPrintTagDecoder:
         if data.material_type and color_name:
             # Remove material type from name to get color
             words = color_name.split()
-            color_name = " ".join(
-                w for w in words if w.upper() != data.material_type.upper()
-            )
+            color_name = " ".join(w for w in words if w.upper() != data.material_type.upper())
 
         # Get slicer filament code
         slicer_code = MATERIAL_TO_SLICER.get(data.material_type or "", "")

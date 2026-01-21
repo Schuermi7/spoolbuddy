@@ -2,15 +2,16 @@
 
 import json
 import struct
+
 import pytest
 from tags import (
-    TagType,
-    TagDecoder,
-    SpoolEaseDecoder,
-    OpenSpoolDecoder,
     OpenPrintTagDecoder,
+    OpenSpoolDecoder,
     OpenTag3DDecoder,
     OpenTag3DTagData,
+    SpoolEaseDecoder,
+    TagDecoder,
+    TagType,
 )
 from tags.bambulab import BambuLabDecoder
 
@@ -95,11 +96,7 @@ class TestOpenSpoolDecoder:
 
     def test_can_decode_valid_payload(self):
         """Should recognize OpenSpool JSON."""
-        payload = json.dumps({
-            "protocol": "openspool",
-            "version": "1.0",
-            "type": "PLA"
-        }).encode("utf-8")
+        payload = json.dumps({"protocol": "openspool", "version": "1.0", "type": "PLA"}).encode("utf-8")
         assert OpenSpoolDecoder.can_decode_payload(payload) is True
 
     def test_cannot_decode_other_json(self):
@@ -115,15 +112,17 @@ class TestOpenSpoolDecoder:
     def test_decode_full(self):
         """Should decode complete OpenSpool JSON."""
         uid_hex = "04AABBCCDD1122"
-        payload = json.dumps({
-            "protocol": "openspool",
-            "version": "1.0",
-            "type": "PETG",
-            "color_hex": "FF5733",
-            "brand": "Generic",
-            "min_temp": "230",
-            "max_temp": "250"
-        }).encode("utf-8")
+        payload = json.dumps(
+            {
+                "protocol": "openspool",
+                "version": "1.0",
+                "type": "PETG",
+                "color_hex": "FF5733",
+                "brand": "Generic",
+                "min_temp": "230",
+                "max_temp": "250",
+            }
+        ).encode("utf-8")
 
         result = OpenSpoolDecoder.decode(uid_hex, payload)
 
@@ -138,10 +137,7 @@ class TestOpenSpoolDecoder:
     def test_decode_minimal(self):
         """Should decode minimal OpenSpool JSON."""
         uid_hex = "04AABBCCDD1122"
-        payload = json.dumps({
-            "protocol": "openspool",
-            "type": "TPU"
-        }).encode("utf-8")
+        payload = json.dumps({"protocol": "openspool", "type": "TPU"}).encode("utf-8")
 
         result = OpenSpoolDecoder.decode(uid_hex, payload)
 
@@ -152,14 +148,16 @@ class TestOpenSpoolDecoder:
     def test_to_spool_conversion(self):
         """Should convert OpenSpool data to normalized spool."""
         uid_hex = "04AABBCCDD1122"
-        payload = json.dumps({
-            "protocol": "openspool",
-            "type": "PLA",
-            "color_hex": "00FF00",
-            "brand": "eSUN",
-            "min_temp": "200",
-            "max_temp": "220"
-        }).encode("utf-8")
+        payload = json.dumps(
+            {
+                "protocol": "openspool",
+                "type": "PLA",
+                "color_hex": "00FF00",
+                "brand": "eSUN",
+                "min_temp": "200",
+                "max_temp": "220",
+            }
+        ).encode("utf-8")
 
         data = OpenSpoolDecoder.decode(uid_hex, payload)
         spool = OpenSpoolDecoder.to_spool(data)
@@ -180,7 +178,7 @@ class TestOpenSpoolDecoder:
             color_hex="AABBCC",
             brand="Test Brand",
             min_temp=240,
-            max_temp=260
+            max_temp=260,
         )
 
         encoded = OpenSpoolDecoder.encode(original)
@@ -215,22 +213,22 @@ class TestOpenTag3DDecoder:
 
         # Material
         mat_bytes = material.encode("utf-8")[:5]
-        payload[0x02:0x02 + len(mat_bytes)] = mat_bytes
+        payload[0x02 : 0x02 + len(mat_bytes)] = mat_bytes
 
         # Modifiers
         if modifiers:
             mod_bytes = modifiers.encode("utf-8")[:5]
-            payload[0x07:0x07 + len(mod_bytes)] = mod_bytes
+            payload[0x07 : 0x07 + len(mod_bytes)] = mod_bytes
 
         # Manufacturer
         if manufacturer:
             mfg_bytes = manufacturer.encode("utf-8")[:16]
-            payload[0x1B:0x1B + len(mfg_bytes)] = mfg_bytes
+            payload[0x1B : 0x1B + len(mfg_bytes)] = mfg_bytes
 
         # Color name
         if color_name:
             color_bytes = color_name.encode("utf-8")[:32]
-            payload[0x2B:0x2B + len(color_bytes)] = color_bytes
+            payload[0x2B : 0x2B + len(color_bytes)] = color_bytes
 
         # Primary color
         if primary_color:
@@ -271,7 +269,7 @@ class TestOpenTag3DDecoder:
             primary_color="1A1A1AFF",
             weight=1000,
             print_temp=250,
-            bed_temp=80
+            bed_temp=80,
         )
         result = OpenTag3DDecoder.decode("04AABBCCDD1122", payload)
 
@@ -301,7 +299,7 @@ class TestOpenTag3DDecoder:
             primary_color="FFA500FF",
             weight=750,
             print_temp=260,
-            bed_temp=100
+            bed_temp=100,
         )
         data = OpenTag3DDecoder.decode("04AABBCCDD1122", payload)
         spool = OpenTag3DDecoder.to_spool(data)
@@ -328,7 +326,7 @@ class TestOpenTag3DDecoder:
             weight_g=800,
             print_temp_c=270,
             bed_temp_c=110,
-            density=1.2
+            density=1.2,
         )
 
         encoded = OpenTag3DDecoder.encode(original)
@@ -354,7 +352,7 @@ class TestBambuLabDecoder:
         filament_type: str = "PLA",
         detailed_type: str = "PLA Basic",
         color_rgba: str = "FF0000FF",
-        spool_weight: int = 250
+        spool_weight: int = 250,
     ) -> dict:
         """Helper to create Bambu Lab MIFARE blocks."""
         blocks = {}
@@ -362,21 +360,21 @@ class TestBambuLabDecoder:
         # Block 1: material variant + material ID
         block1 = bytearray(16)
         variant_bytes = material_variant.encode("ascii")[:8]
-        block1[0:len(variant_bytes)] = variant_bytes
+        block1[0 : len(variant_bytes)] = variant_bytes
         id_bytes = material_id.encode("ascii")[:8]
-        block1[8:8 + len(id_bytes)] = id_bytes
+        block1[8 : 8 + len(id_bytes)] = id_bytes
         blocks[1] = bytes(block1)
 
         # Block 2: filament type
         block2 = bytearray(16)
         type_bytes = filament_type.encode("ascii")[:16]
-        block2[0:len(type_bytes)] = type_bytes
+        block2[0 : len(type_bytes)] = type_bytes
         blocks[2] = bytes(block2)
 
         # Block 4: detailed filament type
         block4 = bytearray(16)
         detailed_bytes = detailed_type.encode("ascii")[:16]
-        block4[0:len(detailed_bytes)] = detailed_bytes
+        block4[0 : len(detailed_bytes)] = detailed_bytes
         blocks[4] = bytes(block4)
 
         # Block 5: color + spool weight
@@ -406,20 +404,12 @@ class TestBambuLabDecoder:
         uid_hex = "04AABBCCDD1122"
 
         # Test PETG
-        blocks = self._create_blocks(
-            material_id="GFG00",
-            filament_type="PETG",
-            detailed_type="PETG Basic"
-        )
+        blocks = self._create_blocks(material_id="GFG00", filament_type="PETG", detailed_type="PETG Basic")
         result = BambuLabDecoder.decode(uid_hex, blocks)
         assert result.filament_type == "PETG"
 
         # Test ABS
-        blocks = self._create_blocks(
-            material_id="GFB00",
-            filament_type="ABS",
-            detailed_type="ABS"
-        )
+        blocks = self._create_blocks(material_id="GFB00", filament_type="ABS", detailed_type="ABS")
         result = BambuLabDecoder.decode(uid_hex, blocks)
         assert result.filament_type == "ABS"
 
@@ -427,10 +417,7 @@ class TestBambuLabDecoder:
         """Should convert Bambu Lab data to normalized spool."""
         uid_hex = "04AABBCCDD1122"
         blocks = self._create_blocks(
-            material_id="GFA01",
-            filament_type="PLA",
-            detailed_type="PLA Matte",
-            color_rgba="00FF00FF"
+            material_id="GFA01", filament_type="PLA", detailed_type="PLA Matte", color_rgba="00FF00FF"
         )
         data = BambuLabDecoder.decode(uid_hex, blocks)
         spool = BambuLabDecoder.to_spool(data)
@@ -458,10 +445,7 @@ class TestTagDecoder:
     def test_decode_ndef_records_openspool(self):
         """Should decode OpenSpool via NDEF records."""
         uid_hex = "04AABBCCDD1122"
-        payload = json.dumps({
-            "protocol": "openspool",
-            "type": "PETG"
-        }).encode("utf-8")
+        payload = json.dumps({"protocol": "openspool", "type": "PETG"}).encode("utf-8")
         records = [{"type": "application/json", "payload": payload}]
 
         result = TagDecoder.decode_ndef_records(uid_hex, records)

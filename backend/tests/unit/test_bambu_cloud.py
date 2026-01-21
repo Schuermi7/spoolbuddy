@@ -9,15 +9,15 @@ Tests cover:
 - Error handling
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timedelta
-import httpx
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import pytest
 from services.bambu_cloud import (
-    BambuCloudService,
-    BambuCloudError,
     BambuCloudAuthError,
+    BambuCloudError,
+    BambuCloudService,
     get_cloud_service,
 )
 
@@ -70,7 +70,7 @@ class TestLoginRequest:
 
         mock_response = _make_mock_response(200, {"loginType": "verifyCode"})
 
-        with patch.object(service._client, 'post', new=AsyncMock(return_value=mock_response)):
+        with patch.object(service._client, "post", new=AsyncMock(return_value=mock_response)):
             result = await service.login_request("test@example.com", "password123")
 
         assert result["success"] is False
@@ -84,7 +84,7 @@ class TestLoginRequest:
 
         mock_response = _make_mock_response(200, {"tfaKey": "some-tfa-key"})
 
-        with patch.object(service._client, 'post', new=AsyncMock(return_value=mock_response)):
+        with patch.object(service._client, "post", new=AsyncMock(return_value=mock_response)):
             result = await service.login_request("test@example.com", "password123")
 
         assert result["success"] is False
@@ -97,7 +97,7 @@ class TestLoginRequest:
 
         mock_response = _make_mock_response(200, {"accessToken": "test-access-token"})
 
-        with patch.object(service._client, 'post', new=AsyncMock(return_value=mock_response)):
+        with patch.object(service._client, "post", new=AsyncMock(return_value=mock_response)):
             result = await service.login_request("test@example.com", "password123")
 
         assert result["success"] is True
@@ -112,7 +112,7 @@ class TestLoginRequest:
 
         mock_response = _make_mock_response(401, {"message": "Invalid credentials"})
 
-        with patch.object(service._client, 'post', new=AsyncMock(return_value=mock_response)):
+        with patch.object(service._client, "post", new=AsyncMock(return_value=mock_response)):
             result = await service.login_request("test@example.com", "wrong-password")
 
         assert result["success"] is False
@@ -124,7 +124,7 @@ class TestLoginRequest:
         """Test login raises error on network failure."""
         service = BambuCloudService()
 
-        with patch.object(service._client, 'post', new=AsyncMock(side_effect=httpx.RequestError("Connection failed"))):
+        with patch.object(service._client, "post", new=AsyncMock(side_effect=httpx.RequestError("Connection failed"))):
             with pytest.raises(BambuCloudAuthError) as exc_info:
                 await service.login_request("test@example.com", "password123")
 
@@ -141,7 +141,7 @@ class TestVerifyCode:
 
         mock_response = _make_mock_response(200, {"accessToken": "verified-token"})
 
-        with patch.object(service._client, 'post', new=AsyncMock(return_value=mock_response)):
+        with patch.object(service._client, "post", new=AsyncMock(return_value=mock_response)):
             result = await service.verify_code("test@example.com", "123456")
 
         assert result["success"] is True
@@ -155,7 +155,7 @@ class TestVerifyCode:
 
         mock_response = _make_mock_response(400, {"message": "Invalid code"})
 
-        with patch.object(service._client, 'post', new=AsyncMock(return_value=mock_response)):
+        with patch.object(service._client, "post", new=AsyncMock(return_value=mock_response)):
             result = await service.verify_code("test@example.com", "000000")
 
         assert result["success"] is False
@@ -166,7 +166,7 @@ class TestVerifyCode:
         """Test verification raises error on network failure."""
         service = BambuCloudService()
 
-        with patch.object(service._client, 'post', new=AsyncMock(side_effect=httpx.RequestError("Timeout"))):
+        with patch.object(service._client, "post", new=AsyncMock(side_effect=httpx.RequestError("Timeout"))):
             with pytest.raises(BambuCloudAuthError) as exc_info:
                 await service.verify_code("test@example.com", "123456")
 
@@ -228,12 +228,15 @@ class TestGetSlicerSettings:
         service.access_token = "valid-token"
         service.token_expiry = datetime.now() + timedelta(days=1)
 
-        mock_response = _make_mock_response(200, {
-            "filament": [{"setting_id": "GFSL05", "name": "PLA Basic"}],
-            "printer": [{"setting_id": "BBL001", "name": "X1 Carbon"}],
-        })
+        mock_response = _make_mock_response(
+            200,
+            {
+                "filament": [{"setting_id": "GFSL05", "name": "PLA Basic"}],
+                "printer": [{"setting_id": "BBL001", "name": "X1 Carbon"}],
+            },
+        )
 
-        with patch.object(service._client, 'get', new=AsyncMock(return_value=mock_response)):
+        with patch.object(service._client, "get", new=AsyncMock(return_value=mock_response)):
             result = await service.get_slicer_settings()
 
         assert "filament" in result
@@ -260,7 +263,7 @@ class TestGetSlicerSettings:
 
         mock_get = AsyncMock(return_value=_make_mock_response(200, {"filament": []}))
 
-        with patch.object(service._client, 'get', new=mock_get):
+        with patch.object(service._client, "get", new=mock_get):
             await service.get_slicer_settings(version="01.00.00.00")
 
         # Check the version was passed in the URL
@@ -278,13 +281,16 @@ class TestGetSettingDetail:
         service.access_token = "valid-token"
         service.token_expiry = datetime.now() + timedelta(days=1)
 
-        mock_response = _make_mock_response(200, {
-            "setting_id": "custom-001",
-            "filament_id": "GFSL05",
-            "name": "My Custom PLA",
-        })
+        mock_response = _make_mock_response(
+            200,
+            {
+                "setting_id": "custom-001",
+                "filament_id": "GFSL05",
+                "name": "My Custom PLA",
+            },
+        )
 
-        with patch.object(service._client, 'get', new=AsyncMock(return_value=mock_response)):
+        with patch.object(service._client, "get", new=AsyncMock(return_value=mock_response)):
             result = await service.get_setting_detail("custom-001")
 
         assert "filament_id" in result

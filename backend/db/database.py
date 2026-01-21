@@ -1,13 +1,10 @@
-import aiosqlite
-import uuid
 import time
+import uuid
 from pathlib import Path
-from typing import Optional
-from contextlib import asynccontextmanager
 
+import aiosqlite
 from config import settings
-from models import Spool, SpoolCreate, SpoolUpdate, Printer, PrinterCreate, PrinterUpdate
-
+from models import Printer, PrinterCreate, PrinterUpdate, Spool, SpoolCreate, SpoolUpdate
 
 SCHEMA = """
 -- Spools table
@@ -229,7 +226,7 @@ class Database:
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self._connection: Optional[aiosqlite.Connection] = None
+        self._connection: aiosqlite.Connection | None = None
 
     async def connect(self):
         """Connect to database and run migrations."""
@@ -248,9 +245,9 @@ class Database:
         """Run database migrations for new columns."""
         # Check if spool_number column exists
         async with self.conn.execute("PRAGMA table_info(spools)") as cursor:
-            columns = [row['name'] for row in await cursor.fetchall()]
+            columns = [row["name"] for row in await cursor.fetchall()]
 
-        if 'spool_number' not in columns:
+        if "spool_number" not in columns:
             # SQLite can't add UNIQUE column directly, so add without constraint first
             await self.conn.execute("ALTER TABLE spools ADD COLUMN spool_number INTEGER")
             # Assign sequential numbers to existing spools ordered by created_at
@@ -264,31 +261,31 @@ class Database:
             await self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_spools_spool_number ON spools(spool_number)")
             await self.conn.commit()
 
-        if 'location' not in columns:
+        if "location" not in columns:
             await self.conn.execute("ALTER TABLE spools ADD COLUMN location TEXT")
             await self.conn.commit()
 
-        if 'ext_has_k' not in columns:
+        if "ext_has_k" not in columns:
             await self.conn.execute("ALTER TABLE spools ADD COLUMN ext_has_k INTEGER DEFAULT 0")
             await self.conn.commit()
 
-        if 'slicer_filament_name' not in columns:
+        if "slicer_filament_name" not in columns:
             await self.conn.execute("ALTER TABLE spools ADD COLUMN slicer_filament_name TEXT")
             await self.conn.commit()
 
-        if 'weight_used' not in columns:
+        if "weight_used" not in columns:
             await self.conn.execute("ALTER TABLE spools ADD COLUMN weight_used REAL DEFAULT 0")
             await self.conn.commit()
 
-        if 'archived_at' not in columns:
+        if "archived_at" not in columns:
             await self.conn.execute("ALTER TABLE spools ADD COLUMN archived_at INTEGER")
             await self.conn.commit()
 
         # Check printers table for nozzle_count
         async with self.conn.execute("PRAGMA table_info(printers)") as cursor:
-            printer_columns = [row['name'] for row in await cursor.fetchall()]
+            printer_columns = [row["name"] for row in await cursor.fetchall()]
 
-        if 'nozzle_count' not in printer_columns:
+        if "nozzle_count" not in printer_columns:
             await self.conn.execute("ALTER TABLE printers ADD COLUMN nozzle_count INTEGER DEFAULT 1")
             await self.conn.commit()
 
@@ -319,7 +316,7 @@ class Database:
             rows = await cursor.fetchall()
             return [Spool(**dict(row)) for row in rows]
 
-    async def get_spool(self, spool_id: str) -> Optional[Spool]:
+    async def get_spool(self, spool_id: str) -> Spool | None:
         """Get a single spool by ID."""
         async with self.conn.execute("SELECT * FROM spools WHERE id = ?", (spool_id,)) as cursor:
             row = await cursor.fetchone()
@@ -340,15 +337,34 @@ class Database:
                label_weight, core_weight, weight_new, weight_current, slicer_filament, slicer_filament_name,
                location, note, data_origin, tag_type, ext_has_k, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (spool_id, spool_number, spool.tag_id, spool.material, spool.subtype, spool.color_name,
-             spool.rgba, spool.brand, spool.label_weight, spool.core_weight,
-             spool.weight_new, spool.weight_current, spool.slicer_filament, spool.slicer_filament_name,
-             spool.location, spool.note, spool.data_origin, spool.tag_type, 1 if spool.ext_has_k else 0, now, now)
+            (
+                spool_id,
+                spool_number,
+                spool.tag_id,
+                spool.material,
+                spool.subtype,
+                spool.color_name,
+                spool.rgba,
+                spool.brand,
+                spool.label_weight,
+                spool.core_weight,
+                spool.weight_new,
+                spool.weight_current,
+                spool.slicer_filament,
+                spool.slicer_filament_name,
+                spool.location,
+                spool.note,
+                spool.data_origin,
+                spool.tag_type,
+                1 if spool.ext_has_k else 0,
+                now,
+                now,
+            ),
         )
         await self.conn.commit()
         return await self.get_spool(spool_id)
 
-    async def update_spool(self, spool_id: str, spool: SpoolUpdate) -> Optional[Spool]:
+    async def update_spool(self, spool_id: str, spool: SpoolUpdate) -> Spool | None:
         """Update an existing spool."""
         existing = await self.get_spool(spool_id)
         if not existing:
@@ -360,7 +376,7 @@ class Database:
         for field, value in spool.model_dump(exclude_unset=True).items():
             updates.append(f"{field} = ?")
             # Convert boolean to int for SQLite
-            if field == 'ext_has_k':
+            if field == "ext_has_k":
                 values.append(1 if value else 0)
             else:
                 values.append(value)
@@ -382,27 +398,21 @@ class Database:
         await self.conn.commit()
         return cursor.rowcount > 0
 
-    async def archive_spool(self, spool_id: str) -> Optional[Spool]:
+    async def archive_spool(self, spool_id: str) -> Spool | None:
         """Archive a spool by setting archived_at timestamp."""
         now = int(time.time())
-        await self.conn.execute(
-            "UPDATE spools SET archived_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, spool_id)
-        )
+        await self.conn.execute("UPDATE spools SET archived_at = ?, updated_at = ? WHERE id = ?", (now, now, spool_id))
         await self.conn.commit()
         return await self.get_spool(spool_id)
 
-    async def restore_spool(self, spool_id: str) -> Optional[Spool]:
+    async def restore_spool(self, spool_id: str) -> Spool | None:
         """Restore an archived spool by clearing archived_at."""
         now = int(time.time())
-        await self.conn.execute(
-            "UPDATE spools SET archived_at = NULL, updated_at = ? WHERE id = ?",
-            (now, spool_id)
-        )
+        await self.conn.execute("UPDATE spools SET archived_at = NULL, updated_at = ? WHERE id = ?", (now, spool_id))
         await self.conn.commit()
         return await self.get_spool(spool_id)
 
-    async def get_spool_by_tag(self, tag_id: str, include_archived: bool = False) -> Optional[Spool]:
+    async def get_spool_by_tag(self, tag_id: str, include_archived: bool = False) -> Spool | None:
         """Get a spool by tag ID (base64-encoded UID).
 
         Args:
@@ -429,14 +439,13 @@ class Database:
         """Remove tag_id from a spool (for tag recycling)."""
         now = int(time.time())
         await self.conn.execute(
-            "UPDATE spools SET tag_id = NULL, tag_type = NULL, updated_at = ? WHERE id = ?",
-            (now, spool_id)
+            "UPDATE spools SET tag_id = NULL, tag_type = NULL, updated_at = ? WHERE id = ?", (now, spool_id)
         )
         await self.conn.commit()
 
     async def link_tag_to_spool(
-        self, spool_id: str, tag_id: str, tag_type: Optional[str] = None, data_origin: Optional[str] = None
-    ) -> Optional[Spool]:
+        self, spool_id: str, tag_id: str, tag_type: str | None = None, data_origin: str | None = None
+    ) -> Spool | None:
         """Link an NFC tag to an existing spool.
 
         Args:
@@ -478,14 +487,14 @@ class Database:
         """Get all printers."""
         async with self.conn.execute("SELECT * FROM printers ORDER BY name") as cursor:
             rows = await cursor.fetchall()
-            return [Printer(**{**dict(row), 'auto_connect': bool(row['auto_connect'])}) for row in rows]
+            return [Printer(**{**dict(row), "auto_connect": bool(row["auto_connect"])}) for row in rows]
 
-    async def get_printer(self, serial: str) -> Optional[Printer]:
+    async def get_printer(self, serial: str) -> Printer | None:
         """Get a single printer by serial."""
         async with self.conn.execute("SELECT * FROM printers WHERE serial = ?", (serial,)) as cursor:
             row = await cursor.fetchone()
             if row:
-                return Printer(**{**dict(row), 'auto_connect': bool(row['auto_connect'])})
+                return Printer(**{**dict(row), "auto_connect": bool(row["auto_connect"])})
             return None
 
     async def create_printer(self, printer: PrinterCreate) -> Printer:
@@ -502,13 +511,20 @@ class Database:
                access_code = excluded.access_code,
                last_seen = excluded.last_seen,
                auto_connect = excluded.auto_connect""",
-            (printer.serial, printer.name, printer.model, printer.ip_address,
-             printer.access_code, now, int(printer.auto_connect))
+            (
+                printer.serial,
+                printer.name,
+                printer.model,
+                printer.ip_address,
+                printer.access_code,
+                now,
+                int(printer.auto_connect),
+            ),
         )
         await self.conn.commit()
         return await self.get_printer(printer.serial)
 
-    async def update_printer(self, serial: str, printer: PrinterUpdate) -> Optional[Printer]:
+    async def update_printer(self, serial: str, printer: PrinterUpdate) -> Printer | None:
         """Update an existing printer."""
         existing = await self.get_printer(serial)
         if not existing:
@@ -517,7 +533,7 @@ class Database:
         updates = []
         values = []
         for field, value in printer.model_dump(exclude_unset=True).items():
-            if field == 'auto_connect':
+            if field == "auto_connect":
                 value = int(value) if value is not None else None
             updates.append(f"{field} = ?")
             values.append(value)
@@ -539,8 +555,7 @@ class Database:
     async def update_nozzle_count(self, serial: str, nozzle_count: int) -> bool:
         """Update printer nozzle_count (auto-detected from MQTT)."""
         cursor = await self.conn.execute(
-            "UPDATE printers SET nozzle_count = ? WHERE serial = ?",
-            (nozzle_count, serial)
+            "UPDATE printers SET nozzle_count = ? WHERE serial = ?", (nozzle_count, serial)
         )
         await self.conn.commit()
         return cursor.rowcount > 0
@@ -549,13 +564,11 @@ class Database:
         """Get printers with auto_connect enabled."""
         async with self.conn.execute("SELECT * FROM printers WHERE auto_connect = 1") as cursor:
             rows = await cursor.fetchall()
-            return [Printer(**{**dict(row), 'auto_connect': True}) for row in rows]
+            return [Printer(**{**dict(row), "auto_connect": True}) for row in rows]
 
     # ============ Spool Assignment Operations ============
 
-    async def assign_spool_to_slot(
-        self, spool_id: str, printer_serial: str, ams_id: int, tray_id: int
-    ) -> bool:
+    async def assign_spool_to_slot(self, spool_id: str, printer_serial: str, ams_id: int, tray_id: int) -> bool:
         """Assign a spool to an AMS slot (upsert)."""
         now = int(time.time())
         await self.conn.execute(
@@ -564,7 +577,7 @@ class Database:
                ON CONFLICT(printer_serial, ams_id, tray_id) DO UPDATE SET
                spool_id = excluded.spool_id,
                assigned_at = excluded.assigned_at""",
-            (spool_id, printer_serial, ams_id, tray_id, now)
+            (spool_id, printer_serial, ams_id, tray_id, now),
         )
         await self.conn.commit()
         return True
@@ -573,21 +586,19 @@ class Database:
         """Remove spool assignment from a slot."""
         cursor = await self.conn.execute(
             "DELETE FROM spool_assignments WHERE printer_serial = ? AND ams_id = ? AND tray_id = ?",
-            (printer_serial, ams_id, tray_id)
+            (printer_serial, ams_id, tray_id),
         )
         await self.conn.commit()
         return cursor.rowcount > 0
 
-    async def get_spool_for_slot(
-        self, printer_serial: str, ams_id: int, tray_id: int
-    ) -> Optional[str]:
+    async def get_spool_for_slot(self, printer_serial: str, ams_id: int, tray_id: int) -> str | None:
         """Get spool ID assigned to a slot."""
         async with self.conn.execute(
             "SELECT spool_id FROM spool_assignments WHERE printer_serial = ? AND ams_id = ? AND tray_id = ?",
-            (printer_serial, ams_id, tray_id)
+            (printer_serial, ams_id, tray_id),
         ) as cursor:
             row = await cursor.fetchone()
-            return row['spool_id'] if row else None
+            return row["spool_id"] if row else None
 
     async def get_slot_assignments(self, printer_serial: str) -> list[dict]:
         """Get all spool assignments for a printer."""
@@ -596,26 +607,24 @@ class Database:
                FROM spool_assignments sa
                LEFT JOIN spools s ON sa.spool_id = s.id
                WHERE sa.printer_serial = ?""",
-            (printer_serial,)
+            (printer_serial,),
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
     # ============ Usage History Operations ============
 
-    async def log_usage(
-        self, spool_id: str, printer_serial: str, print_name: str, weight_used: float
-    ) -> int:
+    async def log_usage(self, spool_id: str, printer_serial: str, print_name: str, weight_used: float) -> int:
         """Log filament usage for a print job."""
         cursor = await self.conn.execute(
             """INSERT INTO usage_history (spool_id, printer_serial, print_name, weight_used)
                VALUES (?, ?, ?, ?)""",
-            (spool_id, printer_serial, print_name, weight_used)
+            (spool_id, printer_serial, print_name, weight_used),
         )
         await self.conn.commit()
         return cursor.lastrowid
 
-    async def get_usage_history(self, spool_id: Optional[str] = None, limit: int = 100) -> list[dict]:
+    async def get_usage_history(self, spool_id: str | None = None, limit: int = 100) -> list[dict]:
         """Get usage history, optionally filtered by spool."""
         if spool_id:
             query = """SELECT uh.*, s.material, s.color_name, s.brand
@@ -636,8 +645,8 @@ class Database:
             return [dict(row) for row in rows]
 
     async def update_spool_consumption(
-        self, spool_id: str, weight_used: float, new_weight: Optional[int] = None
-    ) -> Optional[Spool]:
+        self, spool_id: str, weight_used: float, new_weight: int | None = None
+    ) -> Spool | None:
         """Update spool consumption after a print.
 
         Args:
@@ -679,7 +688,7 @@ class Database:
 
         return await self.get_spool(spool_id)
 
-    async def set_spool_weight(self, spool_id: str, weight: int) -> Optional[Spool]:
+    async def set_spool_weight(self, spool_id: str, weight: int) -> Spool | None:
         """Set spool current weight from scale and recalculate weight_used to match.
 
         This syncs the tracking to match the scale reading by:
@@ -705,20 +714,18 @@ class Database:
         await self.conn.execute(
             """UPDATE spools SET weight_current = ?, weight_used = ?, consumed_since_weight = 0, updated_at = ?
                WHERE id = ?""",
-            (weight, weight_used_new, now, spool_id)
+            (weight, weight_used_new, now, spool_id),
         )
         await self.conn.commit()
         return await self.get_spool(spool_id)
 
     # ============ Settings Operations ============
 
-    async def get_setting(self, key: str) -> Optional[str]:
+    async def get_setting(self, key: str) -> str | None:
         """Get a setting value by key."""
-        async with self.conn.execute(
-            "SELECT value FROM settings WHERE key = ?", (key,)
-        ) as cursor:
+        async with self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cursor:
             row = await cursor.fetchone()
-            return row['value'] if row else None
+            return row["value"] if row else None
 
     async def set_setting(self, key: str, value: str) -> None:
         """Set a setting value (upsert)."""
@@ -729,15 +736,13 @@ class Database:
                ON CONFLICT(key) DO UPDATE SET
                value = excluded.value,
                updated_at = excluded.updated_at""",
-            (key, value, now)
+            (key, value, now),
         )
         await self.conn.commit()
 
     async def delete_setting(self, key: str) -> bool:
         """Delete a setting."""
-        cursor = await self.conn.execute(
-            "DELETE FROM settings WHERE key = ?", (key,)
-        )
+        cursor = await self.conn.execute("DELETE FROM settings WHERE key = ?", (key,))
         await self.conn.commit()
         return cursor.rowcount > 0
 
@@ -745,9 +750,7 @@ class Database:
 
     async def get_spool_k_profiles(self, spool_id: str) -> list[dict]:
         """Get K-profiles associated with a spool."""
-        async with self.conn.execute(
-            "SELECT * FROM k_profiles WHERE spool_id = ?", (spool_id,)
-        ) as cursor:
+        async with self.conn.execute("SELECT * FROM k_profiles WHERE spool_id = ?", (spool_id,)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
@@ -763,10 +766,17 @@ class Database:
                    (spool_id, printer_serial, extruder, nozzle_diameter, nozzle_type,
                     k_value, name, cali_idx, setting_id)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (spool_id, profile.get('printer_serial'), profile.get('extruder'),
-                 profile.get('nozzle_diameter'), profile.get('nozzle_type'),
-                 profile.get('k_value'), profile.get('name'),
-                 profile.get('cali_idx'), profile.get('setting_id'))
+                (
+                    spool_id,
+                    profile.get("printer_serial"),
+                    profile.get("extruder"),
+                    profile.get("nozzle_diameter"),
+                    profile.get("nozzle_type"),
+                    profile.get("k_value"),
+                    profile.get("name"),
+                    profile.get("cali_idx"),
+                    profile.get("setting_id"),
+                ),
             )
         await self.conn.commit()
 
@@ -786,8 +796,7 @@ class Database:
 
         for name, weight in DEFAULT_SPOOL_CATALOG:
             await self.conn.execute(
-                "INSERT OR IGNORE INTO spool_catalog (name, weight, is_default) VALUES (?, ?, 1)",
-                (name, weight)
+                "INSERT OR IGNORE INTO spool_catalog (name, weight, is_default) VALUES (?, ?, 1)", (name, weight)
             )
         await self.conn.commit()
 
@@ -802,27 +811,21 @@ class Database:
     async def add_spool_catalog_entry(self, name: str, weight: int) -> dict:
         """Add a new spool catalog entry."""
         cursor = await self.conn.execute(
-            "INSERT INTO spool_catalog (name, weight, is_default) VALUES (?, ?, 0)",
-            (name, weight)
+            "INSERT INTO spool_catalog (name, weight, is_default) VALUES (?, ?, 0)", (name, weight)
         )
         await self.conn.commit()
         async with self.conn.execute(
-            "SELECT id, name, weight, is_default, created_at FROM spool_catalog WHERE id = ?",
-            (cursor.lastrowid,)
+            "SELECT id, name, weight, is_default, created_at FROM spool_catalog WHERE id = ?", (cursor.lastrowid,)
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else {}
 
-    async def update_spool_catalog_entry(self, entry_id: int, name: str, weight: int) -> Optional[dict]:
+    async def update_spool_catalog_entry(self, entry_id: int, name: str, weight: int) -> dict | None:
         """Update a spool catalog entry."""
-        await self.conn.execute(
-            "UPDATE spool_catalog SET name = ?, weight = ? WHERE id = ?",
-            (name, weight, entry_id)
-        )
+        await self.conn.execute("UPDATE spool_catalog SET name = ?, weight = ? WHERE id = ?", (name, weight, entry_id))
         await self.conn.commit()
         async with self.conn.execute(
-            "SELECT id, name, weight, is_default, created_at FROM spool_catalog WHERE id = ?",
-            (entry_id,)
+            "SELECT id, name, weight, is_default, created_at FROM spool_catalog WHERE id = ?", (entry_id,)
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
@@ -838,8 +841,7 @@ class Database:
         await self.conn.execute("DELETE FROM spool_catalog")
         for name, weight in DEFAULT_SPOOL_CATALOG:
             await self.conn.execute(
-                "INSERT INTO spool_catalog (name, weight, is_default) VALUES (?, ?, 1)",
-                (name, weight)
+                "INSERT INTO spool_catalog (name, weight, is_default) VALUES (?, ?, 1)", (name, weight)
             )
         await self.conn.commit()
 
@@ -849,26 +851,21 @@ class Database:
         self,
         printer_serial: str,
         ams_id: int,
-        humidity: Optional[float],
-        humidity_raw: Optional[float],
-        temperature: Optional[float]
+        humidity: float | None,
+        humidity_raw: float | None,
+        temperature: float | None,
     ) -> int:
         """Record AMS sensor reading (humidity/temperature)."""
         now = int(time.time())
         cursor = await self.conn.execute(
             """INSERT INTO ams_sensor_history (printer_serial, ams_id, humidity, humidity_raw, temperature, recorded_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (printer_serial, ams_id, humidity, humidity_raw, temperature, now)
+            (printer_serial, ams_id, humidity, humidity_raw, temperature, now),
         )
         await self.conn.commit()
         return cursor.lastrowid
 
-    async def get_ams_sensor_history(
-        self,
-        printer_serial: str,
-        ams_id: int,
-        hours: int = 24
-    ) -> list[dict]:
+    async def get_ams_sensor_history(self, printer_serial: str, ams_id: int, hours: int = 24) -> list[dict]:
         """Get AMS sensor history for a given time range."""
         now = int(time.time())
         since = now - (hours * 3600)
@@ -877,17 +874,12 @@ class Database:
                FROM ams_sensor_history
                WHERE printer_serial = ? AND ams_id = ? AND recorded_at >= ?
                ORDER BY recorded_at ASC""",
-            (printer_serial, ams_id, since)
+            (printer_serial, ams_id, since),
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
-    async def get_ams_sensor_stats(
-        self,
-        printer_serial: str,
-        ams_id: int,
-        hours: int = 24
-    ) -> dict:
+    async def get_ams_sensor_stats(self, printer_serial: str, ams_id: int, hours: int = 24) -> dict:
         """Get AMS sensor statistics (min/max/avg) for a given time range."""
         now = int(time.time())
         since = now - (hours * 3600)
@@ -902,7 +894,7 @@ class Database:
                  COUNT(*) as count
                FROM ams_sensor_history
                WHERE printer_serial = ? AND ams_id = ? AND recorded_at >= ?""",
-            (printer_serial, ams_id, since)
+            (printer_serial, ams_id, since),
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else {}
@@ -910,16 +902,13 @@ class Database:
     async def cleanup_ams_sensor_history(self, retention_days: int = 30) -> int:
         """Delete AMS sensor history older than retention period."""
         cutoff = int(time.time()) - (retention_days * 24 * 3600)
-        cursor = await self.conn.execute(
-            "DELETE FROM ams_sensor_history WHERE recorded_at < ?",
-            (cutoff,)
-        )
+        cursor = await self.conn.execute("DELETE FROM ams_sensor_history WHERE recorded_at < ?", (cutoff,))
         await self.conn.commit()
         return cursor.rowcount
 
 
 # Global database instance
-_db: Optional[Database] = None
+_db: Database | None = None
 
 
 async def get_db() -> Database:

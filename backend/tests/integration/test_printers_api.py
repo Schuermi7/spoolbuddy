@@ -24,9 +24,7 @@ class TestPrintersAPI:
 
     async def test_create_printer_minimal(self, async_client):
         """Test creating a printer with minimal required fields."""
-        response = await async_client.post("/api/printers", json={
-            "serial": "00M09A987654321"
-        })
+        response = await async_client.post("/api/printers", json={"serial": "00M09A987654321"})
         assert response.status_code == 201
 
         data = response.json()
@@ -57,10 +55,7 @@ class TestPrintersAPI:
 
         # Update the printer
         update_data = {"name": "Updated Printer Name"}
-        response = await async_client.put(
-            f"/api/printers/{sample_printer_data['serial']}",
-            json=update_data
-        )
+        response = await async_client.put(f"/api/printers/{sample_printer_data['serial']}", json=update_data)
         assert response.status_code == 200
 
         data = response.json()

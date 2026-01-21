@@ -25,7 +25,6 @@ Reference: https://github.com/spuder/OpenSpool
 import base64
 import json
 import logging
-from typing import Optional
 
 from .models import OpenSpoolTagData, SpoolFromTag, TagType
 
@@ -84,7 +83,7 @@ class OpenSpoolDecoder:
             return False
 
     @staticmethod
-    def decode(uid_hex: str, payload: bytes) -> Optional[OpenSpoolTagData]:
+    def decode(uid_hex: str, payload: bytes) -> OpenSpoolTagData | None:
         """Decode OpenSpool JSON payload.
 
         Args:
@@ -140,7 +139,7 @@ class OpenSpoolDecoder:
             return None
 
     @staticmethod
-    def decode_json(uid_hex: str, data: dict) -> Optional[OpenSpoolTagData]:
+    def decode_json(uid_hex: str, data: dict) -> OpenSpoolTagData | None:
         """Decode OpenSpool from pre-parsed JSON dict.
 
         Args:

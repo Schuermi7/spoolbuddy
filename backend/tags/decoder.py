@@ -2,19 +2,18 @@
 
 import base64
 import logging
-from typing import Optional, Dict, List
 
-from .models import (
-    TagType,
-    NfcTagType,
-    TagReadResult,
-    SpoolFromTag,
-)
-from .spoolease_format import SpoolEaseDecoder
 from .bambulab import BambuLabDecoder
+from .models import (
+    NfcTagType,
+    SpoolFromTag,
+    TagReadResult,
+    TagType,
+)
 from .openprinttag import OpenPrintTagDecoder
 from .openspool import OpenSpoolDecoder
 from .opentag3d import OpenTag3DDecoder
+from .spoolease_format import SpoolEaseDecoder
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class TagDecoder:
     """Unified decoder for all supported NFC tag types."""
 
     @staticmethod
-    def decode_ndef_url(uid_hex: str, url: str) -> Optional[TagReadResult]:
+    def decode_ndef_url(uid_hex: str, url: str) -> TagReadResult | None:
         """Decode an NDEF URL record (typically from NTAG).
 
         Args:
@@ -48,10 +47,7 @@ class TagDecoder:
         if SpoolEaseDecoder.can_decode(url):
             spoolease_data = SpoolEaseDecoder.decode(url, uid_hex)
             if spoolease_data:
-                result.tag_type = (
-                    TagType.SPOOLEASE_V2 if spoolease_data.version == 2
-                    else TagType.SPOOLEASE_V1
-                )
+                result.tag_type = TagType.SPOOLEASE_V2 if spoolease_data.version == 2 else TagType.SPOOLEASE_V1
                 result.spoolease_data = spoolease_data
                 return result
 
@@ -59,7 +55,7 @@ class TagDecoder:
         return result
 
     @staticmethod
-    def decode_ndef_records(uid_hex: str, ndef_records: List[dict]) -> Optional[TagReadResult]:
+    def decode_ndef_records(uid_hex: str, ndef_records: list[dict]) -> TagReadResult | None:
         """Decode NDEF records (may contain URL or OpenPrintTag).
 
         Args:
@@ -120,8 +116,7 @@ class TagDecoder:
                         spoolease_data = SpoolEaseDecoder.decode(url, uid_hex)
                         if spoolease_data:
                             result.tag_type = (
-                                TagType.SPOOLEASE_V2 if spoolease_data.version == 2
-                                else TagType.SPOOLEASE_V1
+                                TagType.SPOOLEASE_V2 if spoolease_data.version == 2 else TagType.SPOOLEASE_V1
                             )
                             result.spoolease_data = spoolease_data
                             return result
@@ -129,7 +124,7 @@ class TagDecoder:
         return result
 
     @staticmethod
-    def decode_mifare_blocks(uid_hex: str, blocks: Dict[int, bytes]) -> Optional[TagReadResult]:
+    def decode_mifare_blocks(uid_hex: str, blocks: dict[int, bytes]) -> TagReadResult | None:
         """Decode Mifare Classic blocks (Bambu Lab tags).
 
         Args:
@@ -160,7 +155,7 @@ class TagDecoder:
         return result
 
     @staticmethod
-    def to_spool(result: TagReadResult) -> Optional[SpoolFromTag]:
+    def to_spool(result: TagReadResult) -> SpoolFromTag | None:
         """Convert TagReadResult to normalized SpoolFromTag.
 
         Args:
@@ -188,6 +183,7 @@ class TagDecoder:
         elif result.tag_type == TagType.OPENTAG3D:
             if result.opentag3d_data:
                 from .opentag3d import OpenTag3DTagData
+
                 # Reconstruct the data object from dict
                 tag_data = OpenTag3DTagData(**result.opentag3d_data)
                 return OpenTag3DDecoder.to_spool(tag_data)
@@ -195,7 +191,7 @@ class TagDecoder:
         return None
 
     @staticmethod
-    def _decode_ndef_url_payload(payload: bytes) -> Optional[str]:
+    def _decode_ndef_url_payload(payload: bytes) -> str | None:
         """Decode NDEF URL payload to string.
 
         NDEF URL records have a prefix byte indicating the URL scheme:

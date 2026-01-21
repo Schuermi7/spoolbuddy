@@ -8,16 +8,13 @@ import hashlib
 import logging
 import re
 import struct
-from pathlib import Path
-from typing import Optional
 from datetime import datetime, timedelta
 
 import httpx
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
-
 from config import GITHUB_REPO, settings
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/firmware", tags=["firmware"])
@@ -26,26 +23,26 @@ router = APIRouter(prefix="/firmware", tags=["firmware"])
 FIRMWARE_DIR = settings.project_root / "firmware" / "releases"
 
 # Cache for GitHub firmware checks
-_firmware_cache: Optional[dict] = None
-_firmware_cache_time: Optional[datetime] = None
+_firmware_cache: dict | None = None
+_firmware_cache_time: datetime | None = None
 CACHE_DURATION = timedelta(minutes=5)
 
 
 class FirmwareVersion(BaseModel):
     version: str
     filename: str
-    size: Optional[int] = None
-    checksum: Optional[str] = None
-    url: Optional[str] = None
+    size: int | None = None
+    checksum: str | None = None
+    url: str | None = None
 
 
 class FirmwareCheck(BaseModel):
-    current_version: Optional[str] = None
-    latest_version: Optional[str] = None
+    current_version: str | None = None
+    latest_version: str | None = None
     update_available: bool = False
-    download_url: Optional[str] = None
-    release_notes: Optional[str] = None
-    error: Optional[str] = None
+    download_url: str | None = None
+    release_notes: str | None = None
+    error: str | None = None
 
 
 def _get_local_firmware() -> list[FirmwareVersion]:
@@ -59,11 +56,13 @@ def _get_local_firmware() -> list[FirmwareVersion]:
         name = f.stem
         version = name.replace("spoolbuddy-", "").replace("firmware-", "")
 
-        firmware_files.append(FirmwareVersion(
-            version=version,
-            filename=f.name,
-            size=f.stat().st_size,
-        ))
+        firmware_files.append(
+            FirmwareVersion(
+                version=version,
+                filename=f.name,
+                size=f.stat().st_size,
+            )
+        )
 
     # Sort by version descending (using parsed version for proper ordering)
     firmware_files.sort(key=lambda x: _parse_version(x.version) or (0, 0, 0, 0, 0), reverse=True)
@@ -76,13 +75,14 @@ def _parse_version(v: str):
     Supports: 0.1.0, 0.1.0a1, 0.1.0b2, 0.1.0rc1, 0.1.0-beta.2
     """
     import re
+
     # Normalize: 0.1.0-beta.2 -> 0.1.0b2
-    v = re.sub(r'-?alpha\.?', 'a', v)
-    v = re.sub(r'-?beta\.?', 'b', v)
-    v = re.sub(r'-?rc\.?', 'rc', v)
+    v = re.sub(r"-?alpha\.?", "a", v)
+    v = re.sub(r"-?beta\.?", "b", v)
+    v = re.sub(r"-?rc\.?", "rc", v)
 
     # Match: major.minor.patch[prerelease][prerelease_num]
-    match = re.match(r'^(\d+)\.(\d+)\.(\d+)(a|b|rc)?(\d+)?$', v)
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(a|b|rc)?(\d+)?$", v)
     if not match:
         return None
 
@@ -91,7 +91,7 @@ def _parse_version(v: str):
     pre_num = int(match.group(5)) if match.group(5) else 0
 
     # Pre-release ordering: a < b < rc < release
-    pre_order = {'a': 0, 'b': 1, 'rc': 2, None: 3}
+    pre_order = {"a": 0, "b": 1, "rc": 2, None: 3}
 
     return (major, minor, patch, pre_order.get(pre_type, 3), pre_num)
 
@@ -130,7 +130,7 @@ async def get_latest_firmware():
 
 
 @router.get("/check", response_model=FirmwareCheck)
-async def check_firmware_update(current_version: Optional[str] = None):
+async def check_firmware_update(current_version: str | None = None):
     """
     Check for firmware updates.
 
@@ -144,14 +144,15 @@ async def check_firmware_update(current_version: Optional[str] = None):
     # Use device's reported version if not explicitly provided
     if not current_version:
         from main import get_display_firmware_version
+
         current_version = get_display_firmware_version()
 
     result = FirmwareCheck(current_version=current_version)
 
     # Track best available firmware from all sources
-    best_version: Optional[str] = None
-    best_url: Optional[str] = None
-    best_notes: Optional[str] = None
+    best_version: str | None = None
+    best_url: str | None = None
+    best_notes: str | None = None
 
     # Check local firmware
     local_firmware = _get_local_firmware()
@@ -162,8 +163,7 @@ async def check_firmware_update(current_version: Optional[str] = None):
         logger.debug(f"Local firmware available: {latest_local.version}")
 
     # Check GitHub releases (always check, compare with local)
-    if not _firmware_cache or not _firmware_cache_time or \
-            datetime.now() - _firmware_cache_time > CACHE_DURATION:
+    if not _firmware_cache or not _firmware_cache_time or datetime.now() - _firmware_cache_time > CACHE_DURATION:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(
@@ -208,7 +208,9 @@ async def check_firmware_update(current_version: Optional[str] = None):
             best_version = github_version
             best_url = _firmware_cache["url"]
             best_notes = _firmware_cache.get("notes")
-            logger.info(f"GitHub firmware ({github_version}) is newer than local ({local_firmware[0].version if local_firmware else 'none'})")
+            logger.info(
+                f"GitHub firmware ({github_version}) is newer than local ({local_firmware[0].version if local_firmware else 'none'})"
+            )
 
     # Set result
     if best_version:
@@ -250,12 +252,12 @@ async def download_firmware(filename: str):
         filename=filename,
         headers={
             "Content-Length": str(filepath.stat().st_size),
-        }
+        },
     )
 
 
 @router.get("/ota")
-async def get_ota_firmware(version: Optional[str] = None):
+async def get_ota_firmware(version: str | None = None):
     """
     ESP32 OTA endpoint.
 
@@ -293,7 +295,7 @@ async def get_ota_firmware(version: Optional[str] = None):
         headers={
             "Content-Length": str(filepath.stat().st_size),
             "X-Firmware-Version": firmware.version,
-        }
+        },
     )
 
 
@@ -305,6 +307,7 @@ ESP32_APP_DESC_OFFSET = 0x20  # App descriptor offset in first segment
 
 class FirmwareValidationError(Exception):
     """Raised when firmware validation fails."""
+
     pass
 
 
@@ -327,8 +330,7 @@ def _validate_esp32_firmware(data: bytes) -> dict:
     # Check ESP32 image magic byte
     if data[0] != ESP32_IMAGE_MAGIC:
         raise FirmwareValidationError(
-            f"Invalid ESP32 magic byte: expected 0x{ESP32_IMAGE_MAGIC:02X}, "
-            f"got 0x{data[0]:02X}"
+            f"Invalid ESP32 magic byte: expected 0x{ESP32_IMAGE_MAGIC:02X}, got 0x{data[0]:02X}"
         )
 
     # ESP32 image header structure (simplified):
@@ -376,12 +378,13 @@ def _validate_esp32_firmware(data: bytes) -> dict:
     # 0x90: app_elf_sha256 (32 bytes)
 
     try:
+
         def read_str(offset: int, length: int) -> str:
-            raw = data[offset:offset + length]
-            null_idx = raw.find(b'\x00')
+            raw = data[offset : offset + length]
+            null_idx = raw.find(b"\x00")
             if null_idx >= 0:
                 raw = raw[:null_idx]
-            return raw.decode('utf-8', errors='replace').strip()
+            return raw.decode("utf-8", errors="replace").strip()
 
         version = read_str(app_desc_offset + 0x10, 32)
         project_name = read_str(app_desc_offset + 0x30, 32)
@@ -390,7 +393,7 @@ def _validate_esp32_firmware(data: bytes) -> dict:
         idf_version = read_str(app_desc_offset + 0x70, 32)
 
         # Validate version format (should be semver-like)
-        if not version or not re.match(r'^[\d\w\.\-]+$', version):
+        if not version or not re.match(r"^[\d\w\.\-]+$", version):
             raise FirmwareValidationError(f"Invalid version string: {version!r}")
 
         return {
@@ -410,16 +413,16 @@ def _validate_esp32_firmware(data: bytes) -> dict:
 class FirmwareUploadResponse(BaseModel):
     success: bool
     message: str
-    version: Optional[str] = None
-    filename: Optional[str] = None
-    size: Optional[int] = None
-    checksum: Optional[str] = None
+    version: str | None = None
+    filename: str | None = None
+    size: int | None = None
+    checksum: str | None = None
 
 
 @router.post("/upload", response_model=FirmwareUploadResponse)
 async def upload_firmware(
     file: UploadFile = File(...),
-    version: Optional[str] = Form(None),
+    version: str | None = Form(None),
 ):
     """
     Upload a new firmware binary.
@@ -435,28 +438,19 @@ async def upload_firmware(
     """
     # Validate file extension
     if not file.filename or not file.filename.endswith(".bin"):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid file type. Must be a .bin file"
-        )
+        raise HTTPException(status_code=400, detail="Invalid file type. Must be a .bin file")
 
     # Read file content
     try:
         content = await file.read()
     except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to read file: {e}"
-        )
+        raise HTTPException(status_code=400, detail=f"Failed to read file: {e}")
 
     # Validate firmware
     try:
         metadata = _validate_esp32_firmware(content)
     except FirmwareValidationError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid firmware: {e}"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid firmware: {e}")
 
     # Determine version
     if version:
@@ -465,13 +459,12 @@ async def upload_firmware(
         firmware_version = metadata["version"]
     else:
         # Try to extract from filename
-        match = re.search(r'(\d+\.\d+\.\d+)', file.filename)
+        match = re.search(r"(\d+\.\d+\.\d+)", file.filename)
         if match:
             firmware_version = match.group(1)
         else:
             raise HTTPException(
-                status_code=400,
-                detail="Could not determine firmware version. Please provide version parameter."
+                status_code=400, detail="Could not determine firmware version. Please provide version parameter."
             )
 
     # Clean version string
@@ -507,10 +500,7 @@ async def upload_firmware(
     try:
         filepath.write_bytes(content)
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to save firmware: {e}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to save firmware: {e}")
 
     logger.info(f"Uploaded firmware {firmware_version}: {filename} ({len(content)} bytes)")
 

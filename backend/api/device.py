@@ -7,7 +7,6 @@ import asyncio
 import logging
 import socket
 from datetime import datetime
-from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -18,41 +17,45 @@ router = APIRouter(prefix="/device", tags=["device"])
 
 class DeviceInfo(BaseModel):
     """Information about a discovered or connected device."""
+
     ip: str
-    hostname: Optional[str] = None
-    mac_address: Optional[str] = None
-    firmware_version: Optional[str] = None
-    nfc_status: Optional[bool] = None
-    scale_status: Optional[bool] = None
-    uptime: Optional[int] = None  # seconds
-    last_seen: Optional[str] = None
+    hostname: str | None = None
+    mac_address: str | None = None
+    firmware_version: str | None = None
+    nfc_status: bool | None = None
+    scale_status: bool | None = None
+    uptime: int | None = None  # seconds
+    last_seen: str | None = None
 
 
 class DeviceConfig(BaseModel):
     """Device configuration."""
+
     ip: str
     port: int = 80
-    name: Optional[str] = None
+    name: str | None = None
 
 
 class ConnectionStatus(BaseModel):
     """Current device connection status."""
+
     connected: bool
-    device: Optional[DeviceInfo] = None
-    last_error: Optional[str] = None
+    device: DeviceInfo | None = None
+    last_error: str | None = None
     reconnect_attempts: int = 0
 
 
 class DiscoveryResult(BaseModel):
     """Result of device discovery."""
-    devices: List[DeviceInfo]
+
+    devices: list[DeviceInfo]
     scan_duration_ms: int
 
 
 # Global state for device connection
-_connected_device: Optional[DeviceInfo] = None
-_device_config: Optional[DeviceConfig] = None
-_last_error: Optional[str] = None
+_connected_device: DeviceInfo | None = None
+_device_config: DeviceConfig | None = None
+_last_error: str | None = None
 _reconnect_attempts: int = 0
 
 
@@ -67,7 +70,7 @@ async def get_connection_status():
     )
 
 
-@router.get("/config", response_model=Optional[DeviceConfig])
+@router.get("/config", response_model=DeviceConfig | None)
 async def get_device_config():
     """Get saved device configuration."""
     return _device_config
@@ -83,7 +86,7 @@ async def save_device_config(config: DeviceConfig):
 
 
 @router.post("/connect", response_model=ConnectionStatus)
-async def connect_device(config: Optional[DeviceConfig] = None):
+async def connect_device(config: DeviceConfig | None = None):
     """Connect to an ESP32 device.
 
     Args:
@@ -146,7 +149,7 @@ async def discover_devices(timeout_ms: int = 3000):
         timeout_ms: Discovery timeout in milliseconds
     """
     start_time = datetime.now()
-    devices: List[DeviceInfo] = []
+    devices: list[DeviceInfo] = []
 
     # Try mDNS discovery first
     try:
@@ -262,9 +265,10 @@ async def scale_reset():
 
 class RecoveryInfo(BaseModel):
     """USB recovery information."""
-    steps: List[str]
+
+    steps: list[str]
     serial_commands: dict
-    firmware_url: Optional[str] = None
+    firmware_url: str | None = None
 
 
 @router.get("/recovery-info", response_model=RecoveryInfo)
@@ -290,11 +294,13 @@ async def get_recovery_info():
 
 # Helper functions
 
-async def _probe_device(ip: str, port: int) -> Optional[DeviceInfo]:
+
+async def _probe_device(ip: str, port: int) -> DeviceInfo | None:
     """Probe a device to check if it's a SpoolBuddy device."""
     try:
         # Try HTTP endpoint
         import httpx
+
         async with httpx.AsyncClient(timeout=2.0) as client:
             response = await client.get(f"http://{ip}:{port}/api/info")
             if response.status_code == 200:
@@ -328,12 +334,12 @@ async def _probe_device(ip: str, port: int) -> Optional[DeviceInfo]:
     return None
 
 
-async def _discover_mdns(timeout: float) -> List[DeviceInfo]:
+async def _discover_mdns(timeout: float) -> list[DeviceInfo]:
     """Discover devices using mDNS."""
     devices = []
 
     try:
-        from zeroconf import ServiceBrowser, Zeroconf, ServiceListener
+        from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 
         class SpoolBuddyListener(ServiceListener):
             def add_service(self, zc, type_, name):
@@ -341,11 +347,13 @@ async def _discover_mdns(timeout: float) -> List[DeviceInfo]:
                 if info:
                     ip = socket.inet_ntoa(info.addresses[0]) if info.addresses else None
                     if ip:
-                        devices.append(DeviceInfo(
-                            ip=ip,
-                            hostname=info.server,
-                            last_seen=datetime.now().isoformat(),
-                        ))
+                        devices.append(
+                            DeviceInfo(
+                                ip=ip,
+                                hostname=info.server,
+                                last_seen=datetime.now().isoformat(),
+                            )
+                        )
 
             def remove_service(self, zc, type_, name):
                 pass
@@ -355,7 +363,7 @@ async def _discover_mdns(timeout: float) -> List[DeviceInfo]:
 
         zc = Zeroconf()
         listener = SpoolBuddyListener()
-        browser = ServiceBrowser(zc, "_spoolbuddy._tcp.local.", listener)
+        ServiceBrowser(zc, "_spoolbuddy._tcp.local.", listener)
 
         await asyncio.sleep(timeout)
 
@@ -369,7 +377,7 @@ async def _discover_mdns(timeout: float) -> List[DeviceInfo]:
     return devices
 
 
-async def _discover_subnet(timeout: float) -> List[DeviceInfo]:
+async def _discover_subnet(timeout: float) -> list[DeviceInfo]:
     """Discover devices by scanning local subnet."""
     devices = []
 
@@ -399,11 +407,8 @@ async def _discover_subnet(timeout: float) -> List[DeviceInfo]:
 
     # Run with timeout
     try:
-        await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=timeout
-        )
-    except asyncio.TimeoutError:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+    except TimeoutError:
         pass
 
     return devices

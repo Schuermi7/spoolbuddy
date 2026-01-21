@@ -1,44 +1,49 @@
 import asyncio
 import csv
 import json
-import socket
 import logging
+import socket
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Set, Optional, Dict, Tuple
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from zeroconf.asyncio import AsyncZeroconf
-from zeroconf import ServiceInfo
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-
+from api import (
+    catalog_router,
+    device_router,
+    discovery_router,
+    firmware_router,
+    printers_router,
+    serial_router,
+    spools_router,
+    tags_router,
+    updates_router,
+)
+from api.cloud import router as cloud_router
+from api.printers import set_printer_manager
+from api.settings import router as settings_router
 from config import settings
 from db import get_db
-from mqtt import PrinterManager
-from api import spools_router, printers_router, updates_router, firmware_router, tags_router, device_router, serial_router, discovery_router, catalog_router
-from api.settings import router as settings_router
-from api.printers import set_printer_manager
-from api.cloud import router as cloud_router
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from models import PrinterState
-from tags import TagDecoder, SpoolEaseEncoder
+from mqtt import PrinterManager
+from tags import TagDecoder
 from usage_tracker import UsageTracker, estimate_weight_from_percent
+from zeroconf import ServiceInfo
+from zeroconf.asyncio import AsyncZeroconf
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # === Bambu Color Name Lookup ===
 # Maps (material_id, color_rgba_hex) -> color_name from bambu-color-names.csv
-_bambu_color_map: Dict[Tuple[str, str], str] = {}
+_bambu_color_map: dict[tuple[str, str], str] = {}
 
 # === AMS Sensor Recording ===
 # Track last recording time per (printer_serial, ams_id) to rate-limit recordings
-_ams_sensor_last_record: Dict[Tuple[str, int], float] = {}
+_ams_sensor_last_record: dict[tuple[str, int], float] = {}
 AMS_SENSOR_RECORD_INTERVAL = 300  # Record every 5 minutes (300 seconds)
 
 
@@ -50,7 +55,7 @@ def _load_bambu_color_map():
         logger.warning(f"Bambu color names CSV not found at {csv_path}")
         return
     try:
-        with open(csv_path, "r") as f:
+        with open(csv_path) as f:
             reader = csv.reader(f)
             for row in reader:
                 if len(row) >= 3:
@@ -65,7 +70,7 @@ def _load_bambu_color_map():
         logger.warning(f"Failed to load Bambu color names: {e}")
 
 
-def lookup_bambu_color_name(material_id: str, color_rgba: int) -> Optional[str]:
+def lookup_bambu_color_name(material_id: str, color_rgba: int) -> str | None:
     """Look up Bambu color name from material_id and RGBA color value.
 
     Args:
@@ -90,7 +95,7 @@ def lookup_bambu_color_name(material_id: str, color_rgba: int) -> Optional[str]:
     # This is a fallback for when we don't have the original material_id code
     if material_id.startswith("Bambu "):
         # Try all entries that match this color
-        for (mat_id, rgba), name in _bambu_color_map.items():
+        for (_mat_id, rgba), name in _bambu_color_map.items():
             if rgba == rgba_hex:
                 return name
 
@@ -102,30 +107,30 @@ _load_bambu_color_map()
 
 # Global state
 printer_manager = PrinterManager()
-websocket_clients: Set[WebSocket] = set()
+websocket_clients: set[WebSocket] = set()
 usage_tracker = UsageTracker()
 # Track previous printer states for comparison
-_previous_states: Dict[str, PrinterState] = {}
+_previous_states: dict[str, PrinterState] = {}
 # mDNS service for device discovery
-_zeroconf: Optional[AsyncZeroconf] = None
-_mdns_service: Optional[ServiceInfo] = None
+_zeroconf: AsyncZeroconf | None = None
+_mdns_service: ServiceInfo | None = None
 # Track ESP32 display connection (last seen timestamp)
 _display_last_seen: float = 0
 _display_connected: bool = False
 DISPLAY_TIMEOUT_SEC = 10  # Consider disconnected after 10s of no requests
 # Pending commands for display (checked on heartbeat)
-_display_pending_command: Optional[str] = None
+_display_pending_command: str | None = None
 # Device firmware version (reported by device in heartbeat)
-_display_firmware_version: Optional[str] = None
+_display_firmware_version: str | None = None
 # Device reports update is available
 _device_update_available: bool = False
 # Device state (weight, tag) - updated by WebSocket messages from device
-_device_last_weight: Optional[float] = None
+_device_last_weight: float | None = None
 _device_weight_stable: bool = False
 # Device WiFi status - reported by ESP32
-_device_wifi_ssid: Optional[str] = None
-_device_wifi_ip: Optional[str] = None
-_device_wifi_rssi: Optional[int] = None
+_device_wifi_ssid: str | None = None
+_device_wifi_ip: str | None = None
+_device_wifi_rssi: int | None = None
 _device_wifi_state: int = 0  # 0=uninitialized, 1=disconnected, 2=connecting, 3=connected, 4=error
 
 # === Tag Staging System ===
@@ -133,35 +138,35 @@ _device_wifi_state: int = 0  # 0=uninitialized, 1=disconnected, 2=connecting, 3=
 # This allows the user to interact with the tag even if NFC reads are flaky.
 # Staging only clears on: timeout, different tag detected, or manual clear.
 STAGING_TIMEOUT = 30  # seconds
-_staged_tag_id: Optional[str] = None
-_staged_tag_data: Optional[Dict] = None
+_staged_tag_id: str | None = None
+_staged_tag_data: dict | None = None
 _staged_tag_timestamp: float = 0  # time.time() when staged
 
 # Cache of decoded tag data (persists even after staging is cleared)
 # This allows re-staging a tag even if ESP32 only sends tag_id without decoded data
-_tag_data_cache: Dict[str, Dict] = {}
+_tag_data_cache: dict[str, dict] = {}
 
 # Blocked tags - after manual clear, block the tag for a few seconds
 # to prevent immediate re-staging from ESP32's continuous detection
-_blocked_tag_id: Optional[str] = None
+_blocked_tag_id: str | None = None
 _blocked_until: float = 0
 BLOCK_DURATION = 5  # seconds to block after manual clear
 
 # Legacy: keep for backwards compat with existing code
-_device_current_tag_id: Optional[str] = None  # Last tag ID from device (may be None if NFC flaky)
-_device_tag_data: Optional[Dict] = None  # Points to staged data for backwards compat
+_device_current_tag_id: str | None = None  # Last tag ID from device (may be None if NFC flaky)
+_device_tag_data: dict | None = None  # Points to staged data for backwards compat
 
 # Tag removal debounce - avoid false removals from flaky NFC reads
 _tag_last_seen_time: float = time.time()  # When we last saw a tag (init to now to prevent immediate false removal)
 _tag_removal_debounce: float = 0.5  # seconds to wait before confirming tag removal
-_confirmed_tag_id: Optional[str] = None  # Tag ID after debounce (what frontend sees)
+_confirmed_tag_id: str | None = None  # Tag ID after debounce (what frontend sees)
 _ever_had_tag: bool = False  # Track if we've ever seen a tag in this session
 
 # Simulation mode - prevents device updates from clearing simulated tag
 _simulating_tag: bool = False
 
 
-def get_staged_tag() -> Optional[Dict]:
+def get_staged_tag() -> dict | None:
     """Get staged tag if still valid (not timed out). Returns None if expired."""
     global _staged_tag_id, _staged_tag_data, _staged_tag_timestamp
     if _staged_tag_data is None:
@@ -187,7 +192,7 @@ def get_staging_remaining() -> float:
     return max(0, remaining)
 
 
-def stage_tag(tag_id: str, tag_data: Dict) -> bool:
+def stage_tag(tag_id: str, tag_data: dict) -> bool:
     """
     Add tag to staging. Returns True if this is a new/different tag.
     Same tag does NOT reset timer - countdown continues while tag is on reader.
@@ -219,7 +224,7 @@ def stage_tag(tag_id: str, tag_data: Dict) -> bool:
         _staged_tag_timestamp = time.time()
 
     # Cache the decoded data for future re-staging
-    if tag_data and tag_data.get('vendor'):
+    if tag_data and tag_data.get("vendor"):
         _tag_data_cache[tag_id] = tag_data
 
     if is_new_tag:
@@ -284,6 +289,7 @@ def update_display_heartbeat():
 def is_display_connected() -> bool:
     """Check if display is connected (seen within timeout)."""
     import time
+
     if _display_last_seen == 0:
         return False
     return (time.time() - _display_last_seen) < DISPLAY_TIMEOUT_SEC
@@ -296,7 +302,7 @@ def queue_display_command(command: str):
     logger.info(f"Queued display command: {command}")
 
 
-def pop_display_command() -> Optional[str]:
+def pop_display_command() -> str | None:
     """Get and clear the pending display command."""
     global _display_pending_command
     cmd = _display_pending_command
@@ -320,7 +326,7 @@ async def udp_log_listener():
     while True:
         try:
             data, addr = await loop.run_in_executor(None, lambda: sock.recvfrom(4096))
-            message = data.decode('utf-8', errors='replace').strip()
+            message = data.decode("utf-8", errors="replace").strip()
             if message:
                 # Print with ESP32 prefix for clarity
                 print(f"[ESP32] {message}")
@@ -334,7 +340,6 @@ async def udp_log_listener():
 async def check_display_timeout():
     """Background task to check for display timeout and broadcast disconnect."""
     global _display_connected
-    import time
 
     while True:
         await asyncio.sleep(2)  # Check every 2 seconds
@@ -378,10 +383,7 @@ async def on_usage_logged(serial: str, print_name: str, tray_usage: dict):
         spool_id = await db.get_spool_for_slot(serial, ams_id, tray_id)
 
         if not spool_id:
-            logger.debug(
-                f"No spool assigned to slot ({ams_id}, {tray_id}) on {serial}, "
-                f"skipping usage logging"
-            )
+            logger.debug(f"No spool assigned to slot ({ams_id}, {tray_id}) on {serial}, skipping usage logging")
             continue
 
         # Get spool to calculate weight from percentage
@@ -405,12 +407,14 @@ async def on_usage_logged(serial: str, print_name: str, tray_usage: dict):
         )
 
     # Broadcast usage update to UI
-    await broadcast_message({
-        "type": "usage_logged",
-        "serial": serial,
-        "print_name": print_name,
-        "tray_usage": {f"{k[0]}_{k[1]}": v for k, v in tray_usage.items()},
-    })
+    await broadcast_message(
+        {
+            "type": "usage_logged",
+            "serial": serial,
+            "print_name": print_name,
+            "tray_usage": {f"{k[0]}_{k[1]}": v for k, v in tray_usage.items()},
+        }
+    )
 
 
 async def _record_ams_sensors(serial: str, state: PrinterState):
@@ -441,7 +445,9 @@ async def _record_ams_sensors(serial: str, state: PrinterState):
                 temperature=float(unit.temperature) if unit.temperature is not None else None,
             )
             _ams_sensor_last_record[key] = now
-            logger.debug(f"Recorded AMS sensor data for {serial} AMS {ams_id}: humidity={unit.humidity}, temp={unit.temperature}")
+            logger.debug(
+                f"Recorded AMS sensor data for {serial} AMS {ams_id}: humidity={unit.humidity}, temp={unit.temperature}"
+            )
         except Exception as e:
             logger.warning(f"Failed to record AMS sensor data for {serial} AMS {ams_id}: {e}")
 
@@ -542,6 +548,7 @@ def on_assignment_complete(serial: str, ams_id: int, tray_id: int, spool_id: str
     """Handle assignment completion (spool inserted and configured)."""
     # Store for polling
     import time
+
     _assignment_completions.append((time.time(), serial, ams_id, tray_id, spool_id, success))
     # Trim old entries
     while len(_assignment_completions) > _assignment_completions_max:
@@ -714,24 +721,20 @@ app.include_router(settings_router, prefix="/api")
 async def get_server_time():
     """Get server time for ESP32 clock sync."""
     import datetime
+
     now = datetime.datetime.now()
-    return {
-        "hour": now.hour,
-        "minute": now.minute,
-        "second": now.second,
-        "timestamp": int(now.timestamp())
-    }
+    return {"hour": now.hour, "minute": now.minute, "second": now.second, "timestamp": int(now.timestamp())}
 
 
 @app.get("/api/display/heartbeat")
 async def display_heartbeat(
-    version: Optional[str] = None,
-    update_available: Optional[bool] = None,
+    version: str | None = None,
+    update_available: bool | None = None,
     # WiFi status from device
-    wifi_state: Optional[int] = None,
-    wifi_ssid: Optional[str] = None,
-    wifi_ip: Optional[str] = None,
-    wifi_rssi: Optional[int] = None,
+    wifi_state: int | None = None,
+    wifi_ssid: str | None = None,
+    wifi_ip: str | None = None,
+    wifi_rssi: int | None = None,
 ):
     """Heartbeat endpoint for ESP32 display to indicate it's connected."""
     global _display_firmware_version, _device_update_available
@@ -748,10 +751,14 @@ async def display_heartbeat(
         if old_status != update_available:
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(broadcast_message({
-                    "type": "device_update_available",
-                    "update_available": update_available,
-                }))
+                loop.create_task(
+                    broadcast_message(
+                        {
+                            "type": "device_update_available",
+                            "update_available": update_available,
+                        }
+                    )
+                )
             except RuntimeError:
                 pass
 
@@ -772,7 +779,7 @@ async def display_heartbeat(
     return {"ok": True}
 
 
-def get_display_firmware_version() -> Optional[str]:
+def get_display_firmware_version() -> str | None:
     """Get the last reported firmware version from the display."""
     return _display_firmware_version
 
@@ -810,21 +817,21 @@ async def display_status():
 
 @app.post("/api/display/state")
 async def update_device_state(
-    weight: Optional[float] = None,
-    stable: Optional[bool] = None,
-    tag_id: Optional[str] = None,
-    tag_vendor: Optional[str] = None,
-    tag_material: Optional[str] = None,
-    tag_subtype: Optional[str] = None,
-    tag_color: Optional[str] = None,
-    tag_color_rgba: Optional[int] = None,
-    tag_weight: Optional[int] = None,
-    tag_type: Optional[str] = None,
+    weight: float | None = None,
+    stable: bool | None = None,
+    tag_id: str | None = None,
+    tag_vendor: str | None = None,
+    tag_material: str | None = None,
+    tag_subtype: str | None = None,
+    tag_color: str | None = None,
+    tag_color_rgba: int | None = None,
+    tag_weight: int | None = None,
+    tag_type: str | None = None,
     # WiFi status from device
-    wifi_state: Optional[int] = None,
-    wifi_ssid: Optional[str] = None,
-    wifi_ip: Optional[str] = None,
-    wifi_rssi: Optional[int] = None,
+    wifi_state: int | None = None,
+    wifi_ssid: str | None = None,
+    wifi_ip: str | None = None,
+    wifi_rssi: int | None = None,
 ):
     """HTTP endpoint for device to update state (alternative to WebSocket)."""
     global _device_wifi_state, _device_wifi_ssid, _device_wifi_ip, _device_wifi_rssi
@@ -983,7 +990,9 @@ async def handle_tag_detected(websocket: WebSocket, message: dict):
             _device_tag_data["material"] = d.material or ""
             _device_tag_data["subtype"] = d.material_subtype or ""
             _device_tag_data["color_name"] = d.color_name or ""
-            _device_tag_data["color_rgba"] = int(d.color_code + "FF", 16) if d.color_code and len(d.color_code) == 6 else 0
+            _device_tag_data["color_rgba"] = (
+                int(d.color_code + "FF", 16) if d.color_code and len(d.color_code) == 6 else 0
+            )
             _device_tag_data["spool_weight"] = d.weight_label or 0
             _device_tag_data["slicer_filament"] = d.slicer_filament_code or ""
         elif result.bambulab_data:
@@ -996,6 +1005,7 @@ async def handle_tag_detected(websocket: WebSocket, message: dict):
             _device_tag_data["spool_weight"] = d.spool_weight or 0
             # Map material_id to human-readable slicer profile name
             from tags.bambulab import BAMBU_MATERIALS
+
             material_id = d.material_id or ""
             if material_id in BAMBU_MATERIALS:
                 slicer_name, _ = BAMBU_MATERIALS[material_id]
@@ -1081,13 +1091,17 @@ async def handle_device_state(message: dict):
     # (ignore weight-only updates that don't mention tag at all)
     global _ever_had_tag
 
-    logger.debug(f"device_state: has_tag_field={has_tag_field}, tag_id={tag_id}, weight={weight}, confirmed={_confirmed_tag_id}")
+    logger.debug(
+        f"device_state: has_tag_field={has_tag_field}, tag_id={tag_id}, weight={weight}, confirmed={_confirmed_tag_id}"
+    )
 
     # Detect spool removal by weight: if weight drops below threshold, clear tag
     # (device firmware may cache tag_id even after spool is physically removed)
     REMOVAL_WEIGHT_THRESHOLD = 50  # grams - below this, assume spool removed
     if weight is not None and weight < REMOVAL_WEIGHT_THRESHOLD and _confirmed_tag_id is not None:
-        logger.info(f"Spool removal detected by weight ({weight}g < {REMOVAL_WEIGHT_THRESHOLD}g), clearing tag {_confirmed_tag_id}")
+        logger.info(
+            f"Spool removal detected by weight ({weight}g < {REMOVAL_WEIGHT_THRESHOLD}g), clearing tag {_confirmed_tag_id}"
+        )
         _confirmed_tag_id = None
         _device_current_tag_id = None
         state_changed = True
@@ -1107,7 +1121,9 @@ async def handle_device_state(message: dict):
             # Explicit tag_id: null - confirm removal after debounce period
             if _ever_had_tag and _confirmed_tag_id is not None:
                 time_since_last_seen = now - _tag_last_seen_time
-                logger.debug(f"Tag null, time_since_last_seen={time_since_last_seen:.2f}s, debounce={_tag_removal_debounce}")
+                logger.debug(
+                    f"Tag null, time_since_last_seen={time_since_last_seen:.2f}s, debounce={_tag_removal_debounce}"
+                )
                 if time_since_last_seen >= _tag_removal_debounce:
                     logger.info(f"Tag removal confirmed after debounce (was {_confirmed_tag_id})")
                     _confirmed_tag_id = None
@@ -1151,12 +1167,14 @@ async def handle_device_state(message: dict):
         if is_new:
             state_changed = True
             # Broadcast that a new tag was staged
-            await broadcast_message({
-                "type": "tag_staged",
-                "tag_id": tag_id,
-                "tag_data": provided_tag_data,
-                "timeout": STAGING_TIMEOUT,
-            })
+            await broadcast_message(
+                {
+                    "type": "tag_staged",
+                    "tag_id": tag_id,
+                    "tag_data": provided_tag_data,
+                    "timeout": STAGING_TIMEOUT,
+                }
+            )
     elif tag_id and provided_tag_data and not provided_tag_data.get("vendor"):
         # Unknown tag type - has tag_data but no decoded vendor/material
         # Still stage it so user can see it and potentially configure manually
@@ -1167,12 +1185,14 @@ async def handle_device_state(message: dict):
         is_new = stage_tag(tag_id, provided_tag_data)
         if is_new:
             state_changed = True
-            await broadcast_message({
-                "type": "tag_staged",
-                "tag_id": tag_id,
-                "tag_data": provided_tag_data,
-                "timeout": STAGING_TIMEOUT,
-            })
+            await broadcast_message(
+                {
+                    "type": "tag_staged",
+                    "tag_id": tag_id,
+                    "tag_data": provided_tag_data,
+                    "timeout": STAGING_TIMEOUT,
+                }
+            )
     elif tag_id and not provided_tag_data:
         # Tag ID but no decoded data yet - check if it's already staged
         if _staged_tag_id == tag_id:
@@ -1185,12 +1205,14 @@ async def handle_device_state(message: dict):
             logger.info(f"Re-staged tag from cache: {tag_id}")
             if is_new:
                 state_changed = True
-                await broadcast_message({
-                    "type": "tag_staged",
-                    "tag_id": tag_id,
-                    "tag_data": cached_data,
-                    "timeout": STAGING_TIMEOUT,
-                })
+                await broadcast_message(
+                    {
+                        "type": "tag_staged",
+                        "tag_id": tag_id,
+                        "tag_data": cached_data,
+                        "timeout": STAGING_TIMEOUT,
+                    }
+                )
         else:
             # New tag without decoded data - try database lookup
             tag_data = await _lookup_tag_in_database(tag_id)
@@ -1198,12 +1220,14 @@ async def handle_device_state(message: dict):
                 is_new = stage_tag(tag_id, tag_data)
                 if is_new:
                     state_changed = True
-                    await broadcast_message({
-                        "type": "tag_staged",
-                        "tag_id": tag_id,
-                        "tag_data": tag_data,
-                        "timeout": STAGING_TIMEOUT,
-                    })
+                    await broadcast_message(
+                        {
+                            "type": "tag_staged",
+                            "tag_id": tag_id,
+                            "tag_data": tag_data,
+                            "timeout": STAGING_TIMEOUT,
+                        }
+                    )
             else:
                 # Unknown tag not in database - stage as "Unknown" so user can see it
                 logger.info(f"Staging unknown tag (not in database): {tag_id}")
@@ -1220,12 +1244,14 @@ async def handle_device_state(message: dict):
                 is_new = stage_tag(tag_id, tag_data)
                 if is_new:
                     state_changed = True
-                    await broadcast_message({
-                        "type": "tag_staged",
-                        "tag_id": tag_id,
-                        "tag_data": tag_data,
-                        "timeout": STAGING_TIMEOUT,
-                    })
+                    await broadcast_message(
+                        {
+                            "type": "tag_staged",
+                            "tag_id": tag_id,
+                            "tag_data": tag_data,
+                            "timeout": STAGING_TIMEOUT,
+                        }
+                    )
     # else: no tag_id - ignore, let staging timeout naturally
 
     # Keep legacy _device_tag_data in sync with staging for backwards compat
@@ -1234,22 +1260,24 @@ async def handle_device_state(message: dict):
     # Broadcast state updates (weight and tag)
     if state_changed:
         logger.debug(f"Broadcasting device_state: weight={_device_last_weight}, tag_id={_confirmed_tag_id}")
-        await broadcast_message({
-            "type": "device_state",
-            "weight": _device_last_weight,
-            "stable": _device_weight_stable,
-            "tag_id": _confirmed_tag_id,  # Use debounced tag for real-time display (avoids flaky NFC)
-        })
+        await broadcast_message(
+            {
+                "type": "device_state",
+                "weight": _device_last_weight,
+                "stable": _device_weight_stable,
+                "tag_id": _confirmed_tag_id,  # Use debounced tag for real-time display (avoids flaky NFC)
+            }
+        )
 
 
-async def _lookup_tag_in_database(tag_id: str) -> Optional[Dict]:
+async def _lookup_tag_in_database(tag_id: str) -> dict | None:
     """Look up tag in spool database, return tag_data dict or None."""
     try:
         db = await get_db()
         # Use the dedicated method to look up by tag
         spool = await db.get_spool_by_tag(tag_id)
         if spool:
-            spool_dict = spool.model_dump() if hasattr(spool, 'model_dump') else dict(spool)
+            spool_dict = spool.model_dump() if hasattr(spool, "model_dump") else dict(spool)
             tag_data = {
                 "uid": tag_id,
                 "tag_type": spool_dict.get("tag_type", "database"),
@@ -1297,10 +1325,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "weight_stable": _device_weight_stable,
                 "current_tag_id": _confirmed_tag_id,  # Use debounced tag for real-time display
             },
-            "printers": {
-                serial: conn.connected
-                for serial, conn in printer_manager._connections.items()
-            }
+            "printers": {serial: conn.connected for serial, conn in printer_manager._connections.items()},
         }
         await websocket.send_text(json.dumps(initial_state))
     except Exception as e:
@@ -1344,6 +1369,7 @@ if settings.static_dir.exists():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "main:app",
         host=settings.host,

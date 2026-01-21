@@ -8,18 +8,15 @@ import base64
 import logging
 import time
 from enum import Enum
-from typing import Optional, List
-
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
 
 from db import get_db
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from tags import (
-    TagType,
-    TagDecoder,
-    SpoolEaseEncoder,
-    SpoolEaseTagData,
     OpenSpoolTagData,
+    SpoolEaseEncoder,
+    TagDecoder,
+    TagType,
 )
 from tags.openspool import OpenSpoolDecoder
 from tags.opentag3d import OpenTag3DDecoder, OpenTag3DTagData
@@ -30,6 +27,7 @@ router = APIRouter(prefix="/tags", tags=["tags"])
 
 class TagFormat(str, Enum):
     """Available tag encoding formats."""
+
     SPOOLEASE_V2 = "SpoolEaseV2"
     OPENSPOOL = "OpenSpool"
     OPENTAG3D = "OpenTag3D"
@@ -37,6 +35,7 @@ class TagFormat(str, Enum):
 
 class TagFormatInfo(BaseModel):
     """Information about a tag format."""
+
     id: str
     name: str
     description: str
@@ -47,65 +46,69 @@ class TagFormatInfo(BaseModel):
 
 class EncodeRequest(BaseModel):
     """Request to encode spool data for NFC tag."""
+
     spool_id: str
     format: TagFormat
-    tag_uid: Optional[str] = None  # Hex-encoded tag UID (optional)
+    tag_uid: str | None = None  # Hex-encoded tag UID (optional)
     extended: bool = False  # For OpenTag3D: use extended format
 
 
 class EncodeResponse(BaseModel):
     """Response with encoded tag data."""
+
     format: str
     spool_id: str
-    tag_uid: Optional[str] = None
+    tag_uid: str | None = None
 
     # For URL-based formats (SpoolEase)
-    url: Optional[str] = None
+    url: str | None = None
 
     # For binary formats (OpenTag3D)
-    payload_base64: Optional[str] = None
-    payload_hex: Optional[str] = None
+    payload_base64: str | None = None
+    payload_hex: str | None = None
 
     # For JSON formats (OpenSpool)
-    json_payload: Optional[str] = None
+    json_payload: str | None = None
 
     # NDEF record info
-    ndef_type: Optional[str] = None
+    ndef_type: str | None = None
     payload_size: int = 0
 
 
 class DecodeRequest(BaseModel):
     """Request to decode tag data (for testing)."""
+
     tag_uid: str  # Hex-encoded UID
 
     # One of these should be provided
-    url: Optional[str] = None  # For SpoolEase (NDEF URL)
-    json_payload: Optional[str] = None  # For OpenSpool
-    payload_base64: Optional[str] = None  # For OpenTag3D binary
+    url: str | None = None  # For SpoolEase (NDEF URL)
+    json_payload: str | None = None  # For OpenSpool
+    payload_base64: str | None = None  # For OpenTag3D binary
 
 
 class DecodeResponse(BaseModel):
     """Response with decoded tag data."""
+
     tag_type: str
     tag_uid: str
     uid_base64: str
 
     # Normalized spool data
-    material: Optional[str] = None
-    subtype: Optional[str] = None
-    color_name: Optional[str] = None
-    rgba: Optional[str] = None
-    brand: Optional[str] = None
-    label_weight: Optional[int] = None
-    core_weight: Optional[int] = None
-    slicer_filament: Optional[str] = None
-    note: Optional[str] = None
+    material: str | None = None
+    subtype: str | None = None
+    color_name: str | None = None
+    rgba: str | None = None
+    brand: str | None = None
+    label_weight: int | None = None
+    core_weight: int | None = None
+    slicer_filament: str | None = None
+    note: str | None = None
 
     # Raw data based on format
-    raw_data: Optional[dict] = None
+    raw_data: dict | None = None
 
 
-@router.get("/formats", response_model=List[TagFormatInfo])
+@router.get("/formats", response_model=list[TagFormatInfo])
 async def list_tag_formats():
     """List available tag formats for encoding."""
     return [
@@ -155,7 +158,7 @@ async def encode_tag(request: EncodeRequest):
         raise HTTPException(status_code=404, detail="Spool not found")
 
     # Convert spool to dict for encoding
-    spool_dict = spool.model_dump() if hasattr(spool, 'model_dump') else dict(spool)
+    spool_dict = spool.model_dump() if hasattr(spool, "model_dump") else dict(spool)
 
     # Generate or use provided tag UID
     if request.tag_uid:
@@ -319,27 +322,25 @@ async def decode_tag(request: DecodeRequest):
             response.label_weight = data.get("weight_g")
             response.raw_data = data
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="Must provide one of: url, json_payload, or payload_base64"
-        )
+        raise HTTPException(status_code=400, detail="Must provide one of: url, json_payload, or payload_base64")
 
     return response
 
 
 class TagLookupResponse(BaseModel):
     """Response with tag/spool data lookup."""
+
     found: bool = False
     tag_uid: str = ""
 
     # Decoded/looked up data
-    vendor: Optional[str] = None
-    material: Optional[str] = None
-    subtype: Optional[str] = None
-    color_name: Optional[str] = None
-    color_rgba: Optional[int] = None  # RGBA as integer (0xRRGGBBAA)
-    spool_weight: Optional[int] = None
-    tag_type: Optional[str] = None
+    vendor: str | None = None
+    material: str | None = None
+    subtype: str | None = None
+    color_name: str | None = None
+    color_rgba: int | None = None  # RGBA as integer (0xRRGGBBAA)
+    spool_weight: int | None = None
+    tag_type: str | None = None
 
 
 @router.get("/decode", response_model=TagLookupResponse)
@@ -359,7 +360,7 @@ async def lookup_tag_by_uid(uid: str = Query(..., description="Tag UID in hex (e
     tag_uid_hex = uid.replace(":", "").replace(" ", "").upper()
 
     # Also create colon-separated format for searching
-    tag_uid_colon = ":".join([tag_uid_hex[i:i+2] for i in range(0, len(tag_uid_hex), 2)])
+    ":".join([tag_uid_hex[i : i + 2] for i in range(0, len(tag_uid_hex), 2)])
 
     response = TagLookupResponse(tag_uid=tag_uid_hex)
 
@@ -368,7 +369,7 @@ async def lookup_tag_by_uid(uid: str = Query(..., description="Tag UID in hex (e
     spools = await db.list_spools()
 
     for spool in spools:
-        spool_tag = spool.tag_id if hasattr(spool, 'tag_id') else spool.get('tag_id', '')
+        spool_tag = spool.tag_id if hasattr(spool, "tag_id") else spool.get("tag_id", "")
         if not spool_tag:
             continue
 
@@ -379,20 +380,20 @@ async def lookup_tag_by_uid(uid: str = Query(..., description="Tag UID in hex (e
             response.found = True
 
             # Extract spool data
-            if hasattr(spool, 'model_dump'):
+            if hasattr(spool, "model_dump"):
                 spool_dict = spool.model_dump()
             else:
                 spool_dict = dict(spool)
 
-            response.vendor = spool_dict.get('brand', '')
-            response.material = spool_dict.get('material', '')
-            response.subtype = spool_dict.get('subtype', '')
-            response.color_name = spool_dict.get('color_name', '')
-            response.spool_weight = spool_dict.get('label_weight', 0)
-            response.tag_type = spool_dict.get('tag_type', 'database')
+            response.vendor = spool_dict.get("brand", "")
+            response.material = spool_dict.get("material", "")
+            response.subtype = spool_dict.get("subtype", "")
+            response.color_name = spool_dict.get("color_name", "")
+            response.spool_weight = spool_dict.get("label_weight", 0)
+            response.tag_type = spool_dict.get("tag_type", "database")
 
             # Convert RGBA hex string to integer
-            rgba_str = spool_dict.get('rgba', '')
+            rgba_str = spool_dict.get("rgba", "")
             if rgba_str and len(rgba_str) >= 6:
                 try:
                     # Ensure 8 chars (add FF alpha if missing)
@@ -411,7 +412,7 @@ async def lookup_tag_by_uid(uid: str = Query(..., description="Tag UID in hex (e
 async def encode_from_spool(
     spool_id: str,
     format: TagFormat = Query(TagFormat.SPOOLEASE_V2, description="Tag format to use"),
-    tag_uid: Optional[str] = Query(None, description="Tag UID in hex (optional)"),
+    tag_uid: str | None = Query(None, description="Tag UID in hex (optional)"),
     extended: bool = Query(False, description="Use extended format for OpenTag3D"),
 ):
     """Shorthand endpoint to encode a spool by ID.

@@ -49,15 +49,11 @@ class TestSpoolAssignments:
         spool = await spool_factory()
         printer = await printer_factory()
 
-        result = await test_db.assign_spool_to_slot(
-            spool.id, printer.serial, ams_id=0, tray_id=0
-        )
+        result = await test_db.assign_spool_to_slot(spool.id, printer.serial, ams_id=0, tray_id=0)
         assert result is True
 
         # Verify assignment
-        assigned_spool = await test_db.get_spool_for_slot(
-            printer.serial, ams_id=0, tray_id=0
-        )
+        assigned_spool = await test_db.get_spool_for_slot(printer.serial, ams_id=0, tray_id=0)
         assert assigned_spool == spool.id
 
     async def test_reassign_slot(self, test_db, spool_factory, printer_factory):
@@ -116,9 +112,7 @@ class TestUsageHistory:
         spool = await spool_factory()
         printer = await printer_factory()
 
-        usage_id = await test_db.log_usage(
-            spool.id, printer.serial, "test_print.gcode", 25.5
-        )
+        usage_id = await test_db.log_usage(spool.id, printer.serial, "test_print.gcode", 25.5)
         assert usage_id is not None
 
     async def test_get_usage_history(self, test_db, spool_factory, printer_factory):

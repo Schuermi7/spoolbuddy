@@ -38,9 +38,8 @@ Reference: https://opentag3d.info/spec
 import base64
 import logging
 import struct
-from typing import Optional, List
 
-from .models import SpoolFromTag, TagType
+from .models import SpoolFromTag
 
 logger = logging.getLogger(__name__)
 
@@ -52,21 +51,21 @@ class OpenTag3DTagData:
         self,
         tag_id: str,
         version: int = 0,
-        material_name: Optional[str] = None,
-        modifiers: Optional[str] = None,
-        manufacturer: Optional[str] = None,
-        color_name: Optional[str] = None,
-        primary_color: Optional[str] = None,
-        secondary_colors: Optional[List[str]] = None,
-        diameter_um: Optional[int] = None,
-        weight_g: Optional[int] = None,
-        print_temp_c: Optional[int] = None,
-        bed_temp_c: Optional[int] = None,
-        density: Optional[float] = None,
+        material_name: str | None = None,
+        modifiers: str | None = None,
+        manufacturer: str | None = None,
+        color_name: str | None = None,
+        primary_color: str | None = None,
+        secondary_colors: list[str] | None = None,
+        diameter_um: int | None = None,
+        weight_g: int | None = None,
+        print_temp_c: int | None = None,
+        bed_temp_c: int | None = None,
+        density: float | None = None,
         # Extended fields
-        url: Optional[str] = None,
-        serial: Optional[str] = None,
-        manufacture_date: Optional[str] = None,
+        url: str | None = None,
+        serial: str | None = None,
+        manufacture_date: str | None = None,
     ):
         self.tag_id = tag_id
         self.version = version
@@ -148,13 +147,13 @@ class OpenTag3DDecoder:
         return False
 
     @staticmethod
-    def _read_string(data: bytes, offset: int, length: int) -> Optional[str]:
+    def _read_string(data: bytes, offset: int, length: int) -> str | None:
         """Read a null-terminated or fixed-length UTF-8 string."""
         if offset + length > len(data):
             return None
-        raw = data[offset:offset + length]
+        raw = data[offset : offset + length]
         # Find null terminator
-        null_idx = raw.find(b'\x00')
+        null_idx = raw.find(b"\x00")
         if null_idx >= 0:
             raw = raw[:null_idx]
         try:
@@ -164,15 +163,15 @@ class OpenTag3DDecoder:
             return None
 
     @staticmethod
-    def _read_uint16_be(data: bytes, offset: int) -> Optional[int]:
+    def _read_uint16_be(data: bytes, offset: int) -> int | None:
         """Read a big-endian uint16."""
         if offset + 2 > len(data):
             return None
-        value = struct.unpack(">H", data[offset:offset + 2])[0]
+        value = struct.unpack(">H", data[offset : offset + 2])[0]
         return value if value > 0 else None
 
     @staticmethod
-    def _read_uint8(data: bytes, offset: int) -> Optional[int]:
+    def _read_uint8(data: bytes, offset: int) -> int | None:
         """Read a uint8."""
         if offset >= len(data):
             return None
@@ -180,18 +179,18 @@ class OpenTag3DDecoder:
         return value if value > 0 else None
 
     @staticmethod
-    def _read_color(data: bytes, offset: int) -> Optional[str]:
+    def _read_color(data: bytes, offset: int) -> str | None:
         """Read a 4-byte RGBA color as hex string."""
         if offset + 4 > len(data):
             return None
-        rgba = data[offset:offset + 4]
+        rgba = data[offset : offset + 4]
         # Check if all zeros (no color)
-        if rgba == b'\x00\x00\x00\x00':
+        if rgba == b"\x00\x00\x00\x00":
             return None
         return rgba.hex().upper()
 
     @staticmethod
-    def decode(uid_hex: str, payload: bytes) -> Optional[OpenTag3DTagData]:
+    def decode(uid_hex: str, payload: bytes) -> OpenTag3DTagData | None:
         """Decode OpenTag3D binary payload.
 
         Args:
@@ -257,9 +256,7 @@ class OpenTag3DDecoder:
             manufacture_date = None
 
             if len(payload) >= OpenTag3DDecoder.OFF_URL + OpenTag3DDecoder.SIZE_URL:
-                url = OpenTag3DDecoder._read_string(
-                    payload, OpenTag3DDecoder.OFF_URL, OpenTag3DDecoder.SIZE_URL
-                )
+                url = OpenTag3DDecoder._read_string(payload, OpenTag3DDecoder.OFF_URL, OpenTag3DDecoder.SIZE_URL)
                 if url:
                     url = "https://" + url
 
@@ -388,29 +385,29 @@ class OpenTag3DDecoder:
 
         # Material name
         if data.material_name:
-            mat_bytes = data.material_name.encode("utf-8")[:OpenTag3DDecoder.SIZE_MATERIAL]
-            payload[OpenTag3DDecoder.OFF_MATERIAL:OpenTag3DDecoder.OFF_MATERIAL + len(mat_bytes)] = mat_bytes
+            mat_bytes = data.material_name.encode("utf-8")[: OpenTag3DDecoder.SIZE_MATERIAL]
+            payload[OpenTag3DDecoder.OFF_MATERIAL : OpenTag3DDecoder.OFF_MATERIAL + len(mat_bytes)] = mat_bytes
 
         # Modifiers
         if data.modifiers:
-            mod_bytes = data.modifiers.encode("utf-8")[:OpenTag3DDecoder.SIZE_MODIFIERS]
-            payload[OpenTag3DDecoder.OFF_MODIFIERS:OpenTag3DDecoder.OFF_MODIFIERS + len(mod_bytes)] = mod_bytes
+            mod_bytes = data.modifiers.encode("utf-8")[: OpenTag3DDecoder.SIZE_MODIFIERS]
+            payload[OpenTag3DDecoder.OFF_MODIFIERS : OpenTag3DDecoder.OFF_MODIFIERS + len(mod_bytes)] = mod_bytes
 
         # Manufacturer
         if data.manufacturer:
-            mfg_bytes = data.manufacturer.encode("utf-8")[:OpenTag3DDecoder.SIZE_MANUFACTURER]
-            payload[OpenTag3DDecoder.OFF_MANUFACTURER:OpenTag3DDecoder.OFF_MANUFACTURER + len(mfg_bytes)] = mfg_bytes
+            mfg_bytes = data.manufacturer.encode("utf-8")[: OpenTag3DDecoder.SIZE_MANUFACTURER]
+            payload[OpenTag3DDecoder.OFF_MANUFACTURER : OpenTag3DDecoder.OFF_MANUFACTURER + len(mfg_bytes)] = mfg_bytes
 
         # Color name
         if data.color_name:
-            color_bytes = data.color_name.encode("utf-8")[:OpenTag3DDecoder.SIZE_COLOR_NAME]
-            payload[OpenTag3DDecoder.OFF_COLOR_NAME:OpenTag3DDecoder.OFF_COLOR_NAME + len(color_bytes)] = color_bytes
+            color_bytes = data.color_name.encode("utf-8")[: OpenTag3DDecoder.SIZE_COLOR_NAME]
+            payload[OpenTag3DDecoder.OFF_COLOR_NAME : OpenTag3DDecoder.OFF_COLOR_NAME + len(color_bytes)] = color_bytes
 
         # Primary color (RGBA hex to bytes)
         if data.primary_color:
             try:
                 color_bytes = bytes.fromhex(data.primary_color)
-                payload[OpenTag3DDecoder.OFF_COLOR_PRIMARY:OpenTag3DDecoder.OFF_COLOR_PRIMARY + 4] = color_bytes[:4]
+                payload[OpenTag3DDecoder.OFF_COLOR_PRIMARY : OpenTag3DDecoder.OFF_COLOR_PRIMARY + 4] = color_bytes[:4]
             except ValueError:
                 pass
 
@@ -420,7 +417,7 @@ class OpenTag3DDecoder:
             for i, color in enumerate(data.secondary_colors[:3]):
                 try:
                     color_bytes = bytes.fromhex(color)
-                    payload[offsets[i]:offsets[i] + 4] = color_bytes[:4]
+                    payload[offsets[i] : offsets[i] + 4] = color_bytes[:4]
                 except ValueError:
                     pass
 
@@ -453,12 +450,12 @@ class OpenTag3DDecoder:
                     url = url[8:]
                 elif url.startswith("http://"):
                     url = url[7:]
-                url_bytes = url.encode("ascii")[:OpenTag3DDecoder.SIZE_URL]
-                payload[OpenTag3DDecoder.OFF_URL:OpenTag3DDecoder.OFF_URL + len(url_bytes)] = url_bytes
+                url_bytes = url.encode("ascii")[: OpenTag3DDecoder.SIZE_URL]
+                payload[OpenTag3DDecoder.OFF_URL : OpenTag3DDecoder.OFF_URL + len(url_bytes)] = url_bytes
 
             if data.serial:
-                serial_bytes = data.serial.encode("utf-8")[:OpenTag3DDecoder.SIZE_SERIAL]
-                payload[OpenTag3DDecoder.OFF_SERIAL:OpenTag3DDecoder.OFF_SERIAL + len(serial_bytes)] = serial_bytes
+                serial_bytes = data.serial.encode("utf-8")[: OpenTag3DDecoder.SIZE_SERIAL]
+                payload[OpenTag3DDecoder.OFF_SERIAL : OpenTag3DDecoder.OFF_SERIAL + len(serial_bytes)] = serial_bytes
 
             if data.manufacture_date:
                 try:

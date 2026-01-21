@@ -1,14 +1,14 @@
+import asyncio
 import json
+import logging
 import ssl
 import time
-import logging
-import asyncio
-from typing import Optional, Callable, Any
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import paho.mqtt.client as mqtt
-
-from models import PrinterState, AmsUnit, AmsTray
+from models import AmsTray, AmsUnit, PrinterState
 
 logger = logging.getLogger(__name__)
 
@@ -87,13 +87,14 @@ def get_stage_name(stg_cur: int) -> str:
 @dataclass
 class Calibration:
     """Calibration profile for a filament."""
+
     cali_idx: int
     filament_id: str
     k_value: float
     name: str
-    extruder_id: Optional[int] = None
-    nozzle_diameter: Optional[str] = None
-    setting_id: Optional[str] = None  # Full setting ID for slicer compatibility
+    extruder_id: int | None = None
+    nozzle_diameter: str | None = None
+    setting_id: str | None = None  # Full setting ID for slicer compatibility
 
 
 # Grace period before reporting printer as disconnected (handles brief MQTT interruptions)
@@ -103,6 +104,7 @@ DISCONNECT_GRACE_PERIOD_SEC = 5.0
 @dataclass
 class PendingAssignment:
     """Pending spool assignment waiting for tray insertion."""
+
     spool_id: str
     tray_info_idx: str
     setting_id: str
@@ -122,25 +124,31 @@ class PrinterConnection:
     serial: str
     ip_address: str
     access_code: str
-    name: Optional[str] = None
+    name: str | None = None
 
-    _client: Optional[mqtt.Client] = field(default=None, repr=False)
+    _client: mqtt.Client | None = field(default=None, repr=False)
     _connected: bool = field(default=False, repr=False)
-    _disconnect_time: Optional[float] = field(default=None, repr=False)  # Timestamp of disconnect
+    _disconnect_time: float | None = field(default=None, repr=False)  # Timestamp of disconnect
     _state: PrinterState = field(default_factory=PrinterState, repr=False)
-    _on_state_update: Optional[Callable[[str, PrinterState], None]] = field(default=None, repr=False)
-    _loop: Optional[asyncio.AbstractEventLoop] = field(default=None, repr=False)
+    _on_state_update: Callable[[str, PrinterState], None] | None = field(default=None, repr=False)
+    _loop: asyncio.AbstractEventLoop | None = field(default=None, repr=False)
     _calibrations: dict = field(default_factory=dict, repr=False)  # cali_idx -> Calibration
     _kprofiles: list = field(default_factory=list, repr=False)  # List of calibration profiles (updated on broadcast)
-    _pending_kprofile_response: Optional[asyncio.Event] = field(default=None, repr=False)
-    _expected_kprofile_nozzle: Optional[str] = field(default=None, repr=False)
-    _kprofile_lock: Optional[asyncio.Lock] = field(default=None, repr=False)  # Lock to prevent concurrent requests
+    _pending_kprofile_response: asyncio.Event | None = field(default=None, repr=False)
+    _expected_kprofile_nozzle: str | None = field(default=None, repr=False)
+    _kprofile_lock: asyncio.Lock | None = field(default=None, repr=False)  # Lock to prevent concurrent requests
     _kprofile_cache: dict = field(default_factory=dict, repr=False)  # nozzle_diameter -> (profiles, timestamp)
     _kprofile_cache_ttl: float = field(default=30.0, repr=False)  # Cache TTL in seconds
     _pending_assignments: dict = field(default_factory=dict, repr=False)  # (ams_id, tray_id) -> PendingAssignment
-    _on_assignment_complete: Optional[Callable[[str, int, int, str, bool], None]] = field(default=None, repr=False)  # (serial, ams_id, tray_id, spool_id, success)
-    _on_tray_reading_change: Optional[Callable[[str, Optional[int], int], None]] = field(default=None, repr=False)  # (serial, old_bits, new_bits)
-    _on_nozzle_count_update: Optional[Callable[[str, int], None]] = field(default=None, repr=False)  # (serial, nozzle_count)
+    _on_assignment_complete: Callable[[str, int, int, str, bool], None] | None = field(
+        default=None, repr=False
+    )  # (serial, ams_id, tray_id, spool_id, success)
+    _on_tray_reading_change: Callable[[str, int | None, int], None] | None = field(
+        default=None, repr=False
+    )  # (serial, old_bits, new_bits)
+    _on_nozzle_count_update: Callable[[str, int], None] | None = field(
+        default=None, repr=False
+    )  # (serial, nozzle_count)
     _nozzle_diameters: dict = field(default_factory=dict, repr=False)  # extruder_id -> nozzle_diameter string
     _nozzle_count_detected: bool = field(default=False, repr=False)  # Track if we've already detected nozzle count
 
@@ -164,7 +172,12 @@ class PrinterConnection:
         """Get nozzle diameter for an extruder. Returns '0.4' as fallback."""
         return self._nozzle_diameters.get(extruder_id, "0.4")
 
-    def connect(self, on_state_update: Callable[[str, PrinterState], None], on_disconnect: Optional[Callable[[str], None]] = None, on_connect: Optional[Callable[[str], None]] = None):
+    def connect(
+        self,
+        on_state_update: Callable[[str, PrinterState], None],
+        on_disconnect: Callable[[str], None] | None = None,
+        on_connect: Callable[[str], None] | None = None,
+    ):
         """Connect to printer via MQTT."""
         self._on_state_update = on_state_update
         self._on_disconnect_callback = on_disconnect
@@ -404,7 +417,9 @@ class PrinterConnection:
             logger.error(f"Error setting K value on {self.serial}: {e}")
             return False
 
-    async def get_kprofiles(self, nozzle_diameter: str = "0.4", timeout: float = 5.0, max_retries: int = 3) -> list[dict]:
+    async def get_kprofiles(
+        self, nozzle_diameter: str = "0.4", timeout: float = 5.0, max_retries: int = 3
+    ) -> list[dict]:
         """Request K-profiles from printer with retry logic.
 
         Bambu printers sometimes ignore the first request, so we retry.
@@ -457,16 +472,15 @@ class PrinterConnection:
 
                     # Wait for response with timeout
                     try:
-                        await asyncio.wait_for(
-                            self._pending_kprofile_response.wait(),
-                            timeout=timeout
-                        )
+                        await asyncio.wait_for(self._pending_kprofile_response.wait(), timeout=timeout)
                         logger.info(f"[{self.serial}] Got K-profiles response on attempt {attempt + 1}")
                         # Cache the result
                         self._kprofile_cache[nozzle_diameter] = (self._kprofiles, time.time())
                         return self._kprofiles
-                    except asyncio.TimeoutError:
-                        logger.warning(f"[{self.serial}] K-profile request timeout on attempt {attempt + 1}/{max_retries}")
+                    except TimeoutError:
+                        logger.warning(
+                            f"[{self.serial}] K-profile request timeout on attempt {attempt + 1}/{max_retries}"
+                        )
                         continue
 
                 finally:
@@ -619,7 +633,7 @@ class PrinterConnection:
             return True
         return False
 
-    def get_pending_assignment(self, ams_id: int, tray_id: int) -> Optional[PendingAssignment]:
+    def get_pending_assignment(self, ams_id: int, tray_id: int) -> PendingAssignment | None:
         """Get pending assignment for an AMS slot."""
         return self._pending_assignments.get((ams_id, tray_id))
 
@@ -689,11 +703,9 @@ class PrinterConnection:
             self._send_pushall()
 
             # Notify connect callback
-            if hasattr(self, '_on_connect_callback') and self._on_connect_callback:
+            if hasattr(self, "_on_connect_callback") and self._on_connect_callback:
                 if self._loop and self._loop.is_running():
-                    self._loop.call_soon_threadsafe(
-                        lambda: self._on_connect_callback(self.serial)
-                    )
+                    self._loop.call_soon_threadsafe(lambda: self._on_connect_callback(self.serial))
         else:
             logger.error(f"Connection to {self.serial} failed: {reason_code}")
 
@@ -701,14 +713,14 @@ class PrinterConnection:
         """MQTT disconnect callback."""
         self._connected = False
         self._disconnect_time = time.time()  # Track when disconnect happened
-        logger.info(f"Disconnected from printer {self.serial}: {reason_code} (grace period: {DISCONNECT_GRACE_PERIOD_SEC}s)")
+        logger.info(
+            f"Disconnected from printer {self.serial}: {reason_code} (grace period: {DISCONNECT_GRACE_PERIOD_SEC}s)"
+        )
 
         # Notify disconnect callback
-        if hasattr(self, '_on_disconnect_callback') and self._on_disconnect_callback:
+        if hasattr(self, "_on_disconnect_callback") and self._on_disconnect_callback:
             if self._loop and self._loop.is_running():
-                self._loop.call_soon_threadsafe(
-                    lambda: self._on_disconnect_callback(self.serial)
-                )
+                self._loop.call_soon_threadsafe(lambda: self._on_disconnect_callback(self.serial))
 
     def _on_message(self, client, userdata, msg):
         """MQTT message callback."""
@@ -718,7 +730,11 @@ class PrinterConnection:
             if "print" in payload:
                 print_data = payload["print"]
                 cmd = print_data.get("command", "")
-                if "filaments" in print_data or cmd in ["extrusion_cali_get", "extrusion_cali_sel", "ams_filament_setting"]:
+                if "filaments" in print_data or cmd in [
+                    "extrusion_cali_get",
+                    "extrusion_cali_sel",
+                    "ams_filament_setting",
+                ]:
                     logger.info(f"[{self.serial}] CMD RESPONSE [{cmd}]: {json.dumps(print_data)[:500]}")
             self._handle_message(payload)
         except json.JSONDecodeError as e:
@@ -742,14 +758,16 @@ class PrinterConnection:
         """Request calibration profiles for a nozzle diameter."""
         if self._client and self._connected:
             topic = f"device/{self.serial}/request"
-            payload = json.dumps({
-                "print": {
-                    "command": "extrusion_cali_get",
-                    "filament_id": "",
-                    "nozzle_diameter": nozzle_diameter,
-                    "sequence_id": "1"
+            payload = json.dumps(
+                {
+                    "print": {
+                        "command": "extrusion_cali_get",
+                        "filament_id": "",
+                        "nozzle_diameter": nozzle_diameter,
+                        "sequence_id": "1",
+                    }
                 }
-            })
+            )
             self._client.publish(topic, payload)
             logger.info(f"[{self.serial}] Requested calibrations for nozzle {nozzle_diameter}")
 
@@ -767,7 +785,9 @@ class PrinterConnection:
 
         # Debug: check if there are filaments in the response (calibration data)
         if "filaments" in print_data:
-            logger.info(f"[{self.serial}] Found 'filaments' in message with command={command}, count={len(print_data.get('filaments', []))}")
+            logger.info(
+                f"[{self.serial}] Found 'filaments' in message with command={command}, count={len(print_data.get('filaments', []))}"
+            )
             self._handle_calibration_response(print_data)
             return
 
@@ -845,12 +865,12 @@ class PrinterConnection:
                 self._state.nozzle_count = 2
                 if not self._nozzle_count_detected:
                     self._nozzle_count_detected = True
-                    logger.info(f"[{self.serial}] Detected dual-nozzle printer (extruder_info has {len(extruder_info)} entries)")
+                    logger.info(
+                        f"[{self.serial}] Detected dual-nozzle printer (extruder_info has {len(extruder_info)} entries)"
+                    )
                     if self._on_nozzle_count_update and self._loop:
                         serial = self.serial  # Capture for lambda
-                        self._loop.call_soon_threadsafe(
-                            lambda s=serial: self._on_nozzle_count_update(s, 2)
-                        )
+                        self._loop.call_soon_threadsafe(lambda s=serial: self._on_nozzle_count_update(s, 2))
 
             # Parse per-extruder tray_now values from 'snow' field
             # snow is encoded as: (ams_id << 8) | slot_id
@@ -866,7 +886,9 @@ class PrinterConnection:
                 snow = ext_info.get("snow")  # encoded tray_now for this extruder
                 if snow is not None:
                     snow_int = self._safe_int(snow)
-                    if snow_int is not None and snow_int != 65535 and snow_int != 65279:  # 0xFFFF and 0xFEFF are "no tray"
+                    if (
+                        snow_int is not None and snow_int != 65535 and snow_int != 65279
+                    ):  # 0xFFFF and 0xFEFF are "no tray"
                         # Decode: ams_id = high byte, slot_id = low byte
                         ams_id = (snow_int >> 8) & 0xFF
                         slot_id = snow_int & 0xFF
@@ -892,9 +914,7 @@ class PrinterConnection:
         if self._on_state_update:
             # Schedule callback in event loop if running from MQTT thread
             if self._loop:
-                self._loop.call_soon_threadsafe(
-                    lambda: self._on_state_update(self.serial, self._state)
-                )
+                self._loop.call_soon_threadsafe(lambda: self._on_state_update(self.serial, self._state))
 
     def _handle_calibration_response(self, print_data: dict):
         """Process calibration profiles from extrusion_cali_get response."""
@@ -903,11 +923,15 @@ class PrinterConnection:
         has_pending_request = self._pending_kprofile_response is not None
         expected_nozzle = self._expected_kprofile_nozzle
 
-        logger.info(f"[{self.serial}] K-profile response: nozzle={response_nozzle}, {len(filaments)} profiles, pending={has_pending_request}, expected={expected_nozzle}")
+        logger.info(
+            f"[{self.serial}] K-profile response: nozzle={response_nozzle}, {len(filaments)} profiles, pending={has_pending_request}, expected={expected_nozzle}"
+        )
 
         # If waiting for specific nozzle and this doesn't match, ignore (it's a broadcast)
         if has_pending_request and expected_nozzle and response_nozzle != expected_nozzle:
-            logger.debug(f"[{self.serial}] Ignoring broadcast: got nozzle={response_nozzle}, waiting for {expected_nozzle}")
+            logger.debug(
+                f"[{self.serial}] Ignoring broadcast: got nozzle={response_nozzle}, waiting for {expected_nozzle}"
+            )
             return
 
         # Parse all profiles
@@ -933,15 +957,17 @@ class PrinterConnection:
                 setting_id=filament.get("setting_id"),
             )
             self._calibrations[cali_idx] = calibration
-            profiles.append({
-                "cali_idx": cali_idx,
-                "filament_id": calibration.filament_id,
-                "k_value": calibration.k_value,
-                "name": calibration.name,
-                "nozzle_diameter": response_nozzle,
-                "extruder_id": calibration.extruder_id,
-                "setting_id": calibration.setting_id,
-            })
+            profiles.append(
+                {
+                    "cali_idx": cali_idx,
+                    "filament_id": calibration.filament_id,
+                    "k_value": calibration.k_value,
+                    "name": calibration.name,
+                    "nozzle_diameter": response_nozzle,
+                    "extruder_id": calibration.extruder_id,
+                    "setting_id": calibration.setting_id,
+                }
+            )
 
         # Update kprofiles list
         self._kprofiles = profiles
@@ -973,7 +999,11 @@ class PrinterConnection:
         tray_reading_bits_raw = ams_data.get("tray_reading_bits")
         if tray_reading_bits_raw is not None:
             try:
-                new_tray_reading = int(tray_reading_bits_raw, 16) if isinstance(tray_reading_bits_raw, str) else int(tray_reading_bits_raw)
+                new_tray_reading = (
+                    int(tray_reading_bits_raw, 16)
+                    if isinstance(tray_reading_bits_raw, str)
+                    else int(tray_reading_bits_raw)
+                )
                 if new_tray_reading != self._state.tray_reading_bits:
                     self._state.tray_reading_bits = new_tray_reading
             except (ValueError, TypeError):
@@ -1045,13 +1075,15 @@ class PrinterConnection:
                     if was_empty and is_occupied and key in self._pending_assignments:
                         trays_to_check.append((unit_id, tray_id))
 
-            units.append(AmsUnit(
-                id=unit_id,
-                humidity=humidity,
-                temperature=temp,
-                extruder=extruder,
-                trays=trays,
-            ))
+            units.append(
+                AmsUnit(
+                    id=unit_id,
+                    humidity=humidity,
+                    temperature=temp,
+                    extruder=extruder,
+                    trays=trays,
+                )
+            )
 
         self._state.ams_units = units
 
@@ -1059,7 +1091,7 @@ class PrinterConnection:
         for ams_id, tray_id in trays_to_check:
             self._execute_pending_assignment(ams_id, tray_id)
 
-    def _parse_tray(self, tray_data: dict, ams_id: int, tray_id: int) -> Optional[AmsTray]:
+    def _parse_tray(self, tray_data: dict, ams_id: int, tray_id: int) -> AmsTray | None:
         """Parse single tray data."""
         if not tray_data:
             return None
@@ -1102,7 +1134,7 @@ class PrinterConnection:
         return tray
 
     @staticmethod
-    def _safe_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    def _safe_int(value: Any, default: int | None = None) -> int | None:
         """Safely convert value to int."""
         if value is None:
             return default
@@ -1112,7 +1144,7 @@ class PrinterConnection:
             return default
 
     @staticmethod
-    def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+    def _safe_float(value: Any, default: float | None = None) -> float | None:
         """Safely convert value to float."""
         if value is None:
             return default
@@ -1127,12 +1159,12 @@ class PrinterManager:
 
     def __init__(self):
         self._connections: dict[str, PrinterConnection] = {}
-        self._on_state_update: Optional[Callable[[str, PrinterState], None]] = None
-        self._on_disconnect: Optional[Callable[[str], None]] = None
-        self._on_connect: Optional[Callable[[str], None]] = None
-        self._on_assignment_complete: Optional[Callable[[str, int, int, str, bool], None]] = None
-        self._on_tray_reading_change: Optional[Callable[[str, Optional[int], int], None]] = None
-        self._on_nozzle_count_update: Optional[Callable[[str, int], None]] = None
+        self._on_state_update: Callable[[str, PrinterState], None] | None = None
+        self._on_disconnect: Callable[[str], None] | None = None
+        self._on_connect: Callable[[str], None] | None = None
+        self._on_assignment_complete: Callable[[str, int, int, str, bool], None] | None = None
+        self._on_tray_reading_change: Callable[[str, int | None, int], None] | None = None
+        self._on_nozzle_count_update: Callable[[str, int], None] | None = None
 
     def set_state_callback(self, callback: Callable[[str, PrinterState], None]):
         """Set callback for printer state updates."""
@@ -1156,7 +1188,7 @@ class PrinterManager:
         for conn in self._connections.values():
             conn._on_assignment_complete = callback
 
-    def set_tray_reading_callback(self, callback: Callable[[str, Optional[int], int], None]):
+    def set_tray_reading_callback(self, callback: Callable[[str, int | None, int], None]):
         """Set callback for when tray reading state changes.
 
         Callback receives: (serial, old_bits, new_bits)
@@ -1178,7 +1210,7 @@ class PrinterManager:
         for conn in self._connections.values():
             conn._on_nozzle_count_update = callback
 
-    async def connect(self, serial: str, ip_address: str, access_code: str, name: Optional[str] = None):
+    async def connect(self, serial: str, ip_address: str, access_code: str, name: str | None = None):
         """Connect to a printer."""
         if serial in self._connections:
             logger.warning(f"Printer {serial} already connected")
@@ -1225,7 +1257,9 @@ class PrinterManager:
         # and paho-mqtt's loop_start() will attempt automatic reconnection
         if serial in self._connections:
             conn = self._connections[serial]
-            logger.info(f"PrinterManager: {serial} status: _connected={conn._connected}, disconnect_time={conn._disconnect_time}")
+            logger.info(
+                f"PrinterManager: {serial} status: _connected={conn._connected}, disconnect_time={conn._disconnect_time}"
+            )
         # Notify external callback
         if self._on_disconnect:
             self._on_disconnect(serial)
@@ -1250,7 +1284,7 @@ class PrinterManager:
         their complete current state including AMS extruder assignments.
         """
         refreshed = 0
-        for serial, conn in self._connections.items():
+        for _serial, conn in self._connections.items():
             if conn.connected:
                 conn.refresh_state()
                 refreshed += 1
@@ -1262,7 +1296,7 @@ class PrinterManager:
         conn = self._connections.get(serial)
         return conn.connected if conn else False
 
-    def get_state(self, serial: str) -> Optional[PrinterState]:
+    def get_state(self, serial: str) -> PrinterState | None:
         """Get printer state."""
         conn = self._connections.get(serial)
         return conn.state if conn else None
@@ -1272,7 +1306,9 @@ class PrinterManager:
         statuses = {serial: conn.connected for serial, conn in self._connections.items()}
         # Log detailed status for debugging
         for serial, conn in self._connections.items():
-            logger.info(f"Connection status for {serial}: _connected={conn._connected}, disconnect_time={conn._disconnect_time}, connected_prop={conn.connected}")
+            logger.info(
+                f"Connection status for {serial}: _connected={conn._connected}, disconnect_time={conn._disconnect_time}, connected_prop={conn.connected}"
+            )
         return statuses
 
     def set_filament(
@@ -1431,7 +1467,7 @@ class PrinterManager:
 
         return conn.cancel_assignment(ams_id, tray_id)
 
-    def get_pending_assignment(self, serial: str, ams_id: int, tray_id: int) -> Optional[PendingAssignment]:
+    def get_pending_assignment(self, serial: str, ams_id: int, tray_id: int) -> PendingAssignment | None:
         """Get pending assignment for an AMS slot."""
         conn = self._connections.get(serial)
         if not conn:

@@ -4,10 +4,10 @@ Bambu Lab Cloud API Service
 Handles authentication and fetching slicer presets from Bambu Cloud.
 """
 
-import httpx
 import logging
-from typing import Optional
 from datetime import datetime, timedelta
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +16,13 @@ BAMBU_API_BASE = "https://api.bambulab.com"
 
 class BambuCloudError(Exception):
     """Base exception for Bambu Cloud errors."""
+
     pass
 
 
 class BambuCloudAuthError(BambuCloudError):
     """Authentication related errors."""
+
     pass
 
 
@@ -29,8 +31,8 @@ class BambuCloudService:
 
     def __init__(self):
         self.base_url = BAMBU_API_BASE
-        self.access_token: Optional[str] = None
-        self.token_expiry: Optional[datetime] = None
+        self.access_token: str | None = None
+        self.token_expiry: datetime | None = None
         self._client = httpx.AsyncClient(timeout=30.0)
 
     @property
@@ -38,9 +40,7 @@ class BambuCloudService:
         """Check if we have a valid token."""
         if not self.access_token:
             return False
-        if self.token_expiry and datetime.now() > self.token_expiry:
-            return False
-        return True
+        return not (self.token_expiry and datetime.now() > self.token_expiry)
 
     def _get_headers(self) -> dict:
         """Get headers for authenticated requests."""
@@ -63,33 +63,21 @@ class BambuCloudService:
                 json={
                     "account": email,
                     "password": password,
-                }
+                },
             )
 
             data = response.json()
 
             if response.status_code == 200:
                 if data.get("loginType") == "verifyCode" or "tfaKey" in data:
-                    return {
-                        "success": False,
-                        "needs_verification": True,
-                        "message": "Verification code sent to email"
-                    }
+                    return {"success": False, "needs_verification": True, "message": "Verification code sent to email"}
 
                 if "accessToken" in data:
                     self._set_tokens(data)
-                    return {
-                        "success": True,
-                        "needs_verification": False,
-                        "message": "Login successful"
-                    }
+                    return {"success": True, "needs_verification": False, "message": "Login successful"}
 
             error_msg = data.get("message") or data.get("error") or "Login failed"
-            return {
-                "success": False,
-                "needs_verification": False,
-                "message": error_msg
-            }
+            return {"success": False, "needs_verification": False, "message": error_msg}
 
         except Exception as e:
             logger.error(f"Login request failed: {e}")
@@ -106,22 +94,16 @@ class BambuCloudService:
                 json={
                     "account": email,
                     "code": code,
-                }
+                },
             )
 
             data = response.json()
 
             if response.status_code == 200 and "accessToken" in data:
                 self._set_tokens(data)
-                return {
-                    "success": True,
-                    "message": "Login successful"
-                }
+                return {"success": True, "message": "Login successful"}
 
-            return {
-                "success": False,
-                "message": data.get("message", "Verification failed")
-            }
+            return {"success": False, "message": data.get("message", "Verification failed")}
 
         except Exception as e:
             logger.error(f"Verification failed: {e}")
@@ -156,7 +138,7 @@ class BambuCloudService:
             response = await self._client.get(
                 f"{self.base_url}/v1/iot-service/api/slicer/setting",
                 headers=self._get_headers(),
-                params={"version": version}
+                params={"version": version},
             )
 
             data = response.json()
@@ -169,7 +151,7 @@ class BambuCloudService:
         except httpx.RequestError as e:
             raise BambuCloudError(f"Request failed: {e}")
 
-    async def get_setting_detail(self, setting_id: str) -> Optional[dict]:
+    async def get_setting_detail(self, setting_id: str) -> dict | None:
         """
         Get detailed information for a specific setting/preset.
 
@@ -182,8 +164,7 @@ class BambuCloudService:
 
         try:
             response = await self._client.get(
-                f"{self.base_url}/v1/iot-service/api/slicer/setting/{setting_id}",
-                headers=self._get_headers()
+                f"{self.base_url}/v1/iot-service/api/slicer/setting/{setting_id}", headers=self._get_headers()
             )
 
             if response.status_code == 200:
@@ -202,7 +183,7 @@ class BambuCloudService:
 
 
 # Singleton instance
-_cloud_service: Optional[BambuCloudService] = None
+_cloud_service: BambuCloudService | None = None
 
 
 def get_cloud_service() -> BambuCloudService:

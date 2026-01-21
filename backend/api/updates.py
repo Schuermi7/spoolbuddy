@@ -5,17 +5,15 @@ Handles version checking and git-based updates from GitHub.
 """
 
 import asyncio
-import subprocess
 import logging
-from typing import Optional
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel
-
 from config import APP_VERSION, GITHUB_REPO, settings
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/updates", tags=["updates"])
@@ -24,29 +22,29 @@ router = APIRouter(prefix="/updates", tags=["updates"])
 # Models
 class VersionInfo(BaseModel):
     version: str
-    git_commit: Optional[str] = None
-    git_branch: Optional[str] = None
+    git_commit: str | None = None
+    git_branch: str | None = None
 
 
 class UpdateCheck(BaseModel):
     current_version: str
-    latest_version: Optional[str] = None
+    latest_version: str | None = None
     update_available: bool = False
-    release_notes: Optional[str] = None
-    release_url: Optional[str] = None
-    published_at: Optional[str] = None
-    error: Optional[str] = None
+    release_notes: str | None = None
+    release_url: str | None = None
+    published_at: str | None = None
+    error: str | None = None
 
 
 class UpdateStatus(BaseModel):
     status: str  # "idle", "checking", "downloading", "applying", "restarting", "error"
-    message: Optional[str] = None
-    progress: Optional[int] = None
-    error: Optional[str] = None
+    message: str | None = None
+    progress: int | None = None
+    error: str | None = None
 
 
 class UpdateApplyRequest(BaseModel):
-    version: Optional[str] = None  # If None, updates to latest
+    version: str | None = None  # If None, updates to latest
 
 
 # Global state for update operations
@@ -54,12 +52,12 @@ _update_status = UpdateStatus(status="idle")
 _update_lock = asyncio.Lock()
 
 # Cache for update checks (avoid hammering GitHub API)
-_update_cache: Optional[UpdateCheck] = None
-_cache_time: Optional[datetime] = None
+_update_cache: UpdateCheck | None = None
+_cache_time: datetime | None = None
 CACHE_DURATION = timedelta(minutes=5)
 
 
-def _run_git_command(args: list[str], cwd: Optional[Path] = None) -> tuple[bool, str]:
+def _run_git_command(args: list[str], cwd: Path | None = None) -> tuple[bool, str]:
     """Run a git command and return (success, output)."""
     try:
         result = subprocess.run(
@@ -77,7 +75,7 @@ def _run_git_command(args: list[str], cwd: Optional[Path] = None) -> tuple[bool,
         return False, str(e)
 
 
-def _get_git_info() -> tuple[Optional[str], Optional[str]]:
+def _get_git_info() -> tuple[str | None, str | None]:
     """Get current git commit and branch."""
     commit = None
     branch = None
@@ -140,9 +138,7 @@ async def check_for_updates(force: bool = False):
                     if tags:
                         latest_tag = tags[0]["name"].lstrip("v")
                         result.latest_version = latest_tag
-                        result.update_available = _compare_versions(
-                            APP_VERSION, latest_tag
-                        )
+                        result.update_available = _compare_versions(APP_VERSION, latest_tag)
                     else:
                         # No releases or tags - this is fine for development
                         result.latest_version = APP_VERSION
@@ -195,7 +191,7 @@ def _compare_versions(current: str, latest: str) -> bool:
         return latest > current
 
 
-async def _apply_update_task(version: Optional[str] = None):
+async def _apply_update_task(version: str | None = None):
     """Background task to apply update via git."""
     global _update_status
 
@@ -215,9 +211,7 @@ async def _apply_update_task(version: Optional[str] = None):
             target = f"v{version}" if not version.startswith("v") else version
         else:
             # Get default branch
-            success, default_branch = _run_git_command(
-                ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]
-            )
+            success, default_branch = _run_git_command(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
             if success:
                 target = default_branch.replace("origin/", "")
             else:
@@ -231,9 +225,7 @@ async def _apply_update_task(version: Optional[str] = None):
             if success:
                 target = f"origin/{target}"
             else:
-                _update_status = UpdateStatus(
-                    status="error", error=f"Target '{target}' not found"
-                )
+                _update_status = UpdateStatus(status="error", error=f"Target '{target}' not found")
                 return
 
         # Stash any local changes
@@ -282,9 +274,7 @@ async def apply_update(
 
     async with _update_lock:
         if _update_status.status in ("downloading", "applying"):
-            raise HTTPException(
-                status_code=409, detail="Update already in progress"
-            )
+            raise HTTPException(status_code=409, detail="Update already in progress")
 
         _update_status = UpdateStatus(status="checking", message="Starting update...")
         background_tasks.add_task(_apply_update_task, request.version)

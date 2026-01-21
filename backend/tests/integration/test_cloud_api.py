@@ -11,9 +11,10 @@ Tests cover:
 - Logout
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 class TestCloudStatusAPI:
@@ -39,7 +40,7 @@ class TestCloudStatusAPI:
         await test_db.set_setting("cloud_email", "test@example.com")
 
         # Patch where the function is used (api.cloud), not where it's defined
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.is_authenticated = True
             mock_get_service.return_value = mock_service
@@ -57,18 +58,15 @@ class TestCloudLoginAPI:
 
     async def test_login_needs_verification(self, async_client):
         """Test login returns needs_verification when 2FA required."""
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.login_request = AsyncMock(return_value={
-                "success": False,
-                "needs_verification": True,
-                "message": "Verification code sent"
-            })
+            mock_service.login_request = AsyncMock(
+                return_value={"success": False, "needs_verification": True, "message": "Verification code sent"}
+            )
             mock_get_service.return_value = mock_service
 
             response = await async_client.post(
-                "/api/cloud/login",
-                json={"email": "test@example.com", "password": "password123"}
+                "/api/cloud/login", json={"email": "test@example.com", "password": "password123"}
             )
 
         assert response.status_code == 200
@@ -78,19 +76,16 @@ class TestCloudLoginAPI:
 
     async def test_login_direct_success(self, async_client, test_db):
         """Test login succeeds directly without verification."""
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.access_token = "new-access-token"
-            mock_service.login_request = AsyncMock(return_value={
-                "success": True,
-                "needs_verification": False,
-                "message": "Login successful"
-            })
+            mock_service.login_request = AsyncMock(
+                return_value={"success": True, "needs_verification": False, "message": "Login successful"}
+            )
             mock_get_service.return_value = mock_service
 
             response = await async_client.post(
-                "/api/cloud/login",
-                json={"email": "test@example.com", "password": "password123"}
+                "/api/cloud/login", json={"email": "test@example.com", "password": "password123"}
             )
 
         assert response.status_code == 200
@@ -100,18 +95,15 @@ class TestCloudLoginAPI:
 
     async def test_login_failure(self, async_client):
         """Test login failure returns error message."""
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.login_request = AsyncMock(return_value={
-                "success": False,
-                "needs_verification": False,
-                "message": "Invalid credentials"
-            })
+            mock_service.login_request = AsyncMock(
+                return_value={"success": False, "needs_verification": False, "message": "Invalid credentials"}
+            )
             mock_get_service.return_value = mock_service
 
             response = await async_client.post(
-                "/api/cloud/login",
-                json={"email": "test@example.com", "password": "wrong"}
+                "/api/cloud/login", json={"email": "test@example.com", "password": "wrong"}
             )
 
         assert response.status_code == 200
@@ -123,16 +115,13 @@ class TestCloudLoginAPI:
         """Test login raises 401 on auth error."""
         from services.bambu_cloud import BambuCloudAuthError
 
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.login_request = AsyncMock(
-                side_effect=BambuCloudAuthError("Auth failed")
-            )
+            mock_service.login_request = AsyncMock(side_effect=BambuCloudAuthError("Auth failed"))
             mock_get_service.return_value = mock_service
 
             response = await async_client.post(
-                "/api/cloud/login",
-                json={"email": "test@example.com", "password": "password"}
+                "/api/cloud/login", json={"email": "test@example.com", "password": "password"}
             )
 
         assert response.status_code == 401
@@ -143,18 +132,14 @@ class TestCloudVerifyAPI:
 
     async def test_verify_success(self, async_client, test_db):
         """Test verification completes login successfully."""
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.access_token = "verified-token"
-            mock_service.verify_code = AsyncMock(return_value={
-                "success": True,
-                "message": "Login successful"
-            })
+            mock_service.verify_code = AsyncMock(return_value={"success": True, "message": "Login successful"})
             mock_get_service.return_value = mock_service
 
             response = await async_client.post(
-                "/api/cloud/verify",
-                json={"email": "test@example.com", "code": "123456"}
+                "/api/cloud/verify", json={"email": "test@example.com", "code": "123456"}
             )
 
         assert response.status_code == 200
@@ -163,17 +148,13 @@ class TestCloudVerifyAPI:
 
     async def test_verify_failure(self, async_client):
         """Test verification failure with invalid code."""
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.verify_code = AsyncMock(return_value={
-                "success": False,
-                "message": "Invalid code"
-            })
+            mock_service.verify_code = AsyncMock(return_value={"success": False, "message": "Invalid code"})
             mock_get_service.return_value = mock_service
 
             response = await async_client.post(
-                "/api/cloud/verify",
-                json={"email": "test@example.com", "code": "000000"}
+                "/api/cloud/verify", json={"email": "test@example.com", "code": "000000"}
             )
 
         assert response.status_code == 200
@@ -186,15 +167,12 @@ class TestCloudTokenAPI:
 
     async def test_set_token_valid(self, async_client, test_db):
         """Test setting valid token directly."""
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.get_slicer_settings = AsyncMock(return_value={"filament": []})
             mock_get_service.return_value = mock_service
 
-            response = await async_client.post(
-                "/api/cloud/token",
-                json={"access_token": "valid-token"}
-            )
+            response = await async_client.post("/api/cloud/token", json={"access_token": "valid-token"})
 
         assert response.status_code == 200
         data = response.json()
@@ -204,17 +182,12 @@ class TestCloudTokenAPI:
         """Test setting invalid token fails."""
         from services.bambu_cloud import BambuCloudError
 
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.get_slicer_settings = AsyncMock(
-                side_effect=BambuCloudError("Invalid token")
-            )
+            mock_service.get_slicer_settings = AsyncMock(side_effect=BambuCloudError("Invalid token"))
             mock_get_service.return_value = mock_service
 
-            response = await async_client.post(
-                "/api/cloud/token",
-                json={"access_token": "invalid-token"}
-            )
+            response = await async_client.post("/api/cloud/token", json={"access_token": "invalid-token"})
 
         assert response.status_code == 401
         assert "Invalid token" in response.json()["detail"]
@@ -229,7 +202,7 @@ class TestCloudLogoutAPI:
         await test_db.set_setting("cloud_access_token", "token")
         await test_db.set_setting("cloud_email", "test@example.com")
 
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_get_service.return_value = mock_service
 
@@ -251,7 +224,7 @@ class TestCloudSettingsAPI:
         """Test getting slicer settings when authenticated."""
         await test_db.set_setting("cloud_access_token", "valid-token")
 
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.is_authenticated = True
             mock_service.get_slicer_settings = AsyncMock(return_value=sample_slicer_settings)
@@ -276,7 +249,7 @@ class TestCloudSettingsAPI:
         """Test getting settings with expired token clears credentials."""
         await test_db.set_setting("cloud_access_token", "expired-token")
 
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.is_authenticated = False  # Expired
             mock_get_service.return_value = mock_service
@@ -289,7 +262,7 @@ class TestCloudSettingsAPI:
         """Test getting settings with custom version parameter."""
         await test_db.set_setting("cloud_access_token", "valid-token")
 
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.is_authenticated = True
             mock_service.get_slicer_settings = AsyncMock(return_value={"filament": {"public": [], "private": []}})
@@ -308,7 +281,7 @@ class TestCloudSettingDetailAPI:
         """Test getting specific setting detail."""
         await test_db.set_setting("cloud_access_token", "valid-token")
 
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.is_authenticated = True
             mock_service.get_setting_detail = AsyncMock(return_value=sample_setting_detail)
@@ -324,7 +297,7 @@ class TestCloudSettingDetailAPI:
         """Test getting non-existent setting returns 404."""
         await test_db.set_setting("cloud_access_token", "valid-token")
 
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.is_authenticated = True
             mock_service.get_setting_detail = AsyncMock(return_value=None)
@@ -350,7 +323,7 @@ class TestCloudFilamentsAPI:
         """Test getting filament presets."""
         await test_db.set_setting("cloud_access_token", "valid-token")
 
-        with patch('api.cloud.get_cloud_service') as mock_get_service:
+        with patch("api.cloud.get_cloud_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.is_authenticated = True
             mock_service.get_slicer_settings = AsyncMock(return_value=sample_slicer_settings)

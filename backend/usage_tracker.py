@@ -5,8 +5,8 @@ Monitors printer state changes via MQTT and logs filament usage when prints comp
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Any
 
 from models import PrinterState
 
@@ -16,12 +16,13 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PrintSession:
     """Tracks a single print session."""
+
     printer_serial: str
     print_name: str
     start_progress: int = 0
     # Track AMS tray remain percentages at start
     tray_remain_start: dict = field(default_factory=dict)  # (ams_id, tray_id) -> remain%
-    active_tray: Optional[int] = None  # tray_now at start
+    active_tray: int | None = None  # tray_now at start
 
 
 @dataclass
@@ -31,9 +32,9 @@ class UsageTracker:
     # Active print sessions by printer serial
     _sessions: dict[str, PrintSession] = field(default_factory=dict)
     # Callback to log usage (async)
-    _on_usage_logged: Optional[Callable] = None
+    _on_usage_logged: Callable | None = None
     # Event loop for async operations
-    _loop: Optional[asyncio.AbstractEventLoop] = None
+    _loop: asyncio.AbstractEventLoop | None = None
 
     def set_usage_callback(self, callback: Callable):
         """Set callback for when usage is logged.
@@ -47,7 +48,7 @@ class UsageTracker:
         """Set event loop for async operations."""
         self._loop = loop
 
-    def on_state_update(self, serial: str, state: PrinterState, prev_state: Optional[PrinterState]):
+    def on_state_update(self, serial: str, state: PrinterState, prev_state: PrinterState | None):
         """Handle printer state update.
 
         Args:
@@ -94,10 +95,7 @@ class UsageTracker:
         )
         self._sessions[serial] = session
 
-        logger.info(
-            f"Print started on {serial}: '{print_name}', "
-            f"tracking {len(tray_remain)} tray(s)"
-        )
+        logger.info(f"Print started on {serial}: '{print_name}', tracking {len(tray_remain)} tray(s)")
 
     def _on_print_end(self, serial: str, state: PrinterState, success: bool):
         """Handle print end."""
@@ -128,18 +126,13 @@ class UsageTracker:
                     tray_usage[key] = used_percent
 
         status = "completed" if success else "failed"
-        logger.info(
-            f"Print {status} on {serial}: '{session.print_name}', "
-            f"usage: {tray_usage}"
-        )
+        logger.info(f"Print {status} on {serial}: '{session.print_name}', usage: {tray_usage}")
 
         # Notify callback if usage detected
         if tray_usage and self._on_usage_logged:
             if self._loop:
                 self._loop.call_soon_threadsafe(
-                    lambda: asyncio.create_task(
-                        self._on_usage_logged(serial, session.print_name, tray_usage)
-                    )
+                    lambda: asyncio.create_task(self._on_usage_logged(serial, session.print_name, tray_usage))
                 )
 
     def get_active_sessions(self) -> dict[str, dict]:

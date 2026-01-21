@@ -8,20 +8,20 @@ Supports:
 - OpenTag3D tags (NTAG with NDEF binary)
 """
 
+from .bambulab import BambuLabDecoder
+from .decoder import TagDecoder
 from .models import (
-    TagType,
-    TagReadResult,
-    SpoolEaseTagData,
     BambuLabTagData,
     OpenPrintTagData,
     OpenSpoolTagData,
+    SpoolEaseTagData,
+    TagReadResult,
+    TagType,
 )
-from .spoolease_format import SpoolEaseDecoder, SpoolEaseEncoder
-from .bambulab import BambuLabDecoder
 from .openprinttag import OpenPrintTagDecoder
 from .openspool import OpenSpoolDecoder
 from .opentag3d import OpenTag3DDecoder, OpenTag3DTagData
-from .decoder import TagDecoder
+from .spoolease_format import SpoolEaseDecoder, SpoolEaseEncoder
 
 __all__ = [
     "TagType",

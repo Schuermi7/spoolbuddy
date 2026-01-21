@@ -24,8 +24,7 @@ URL parameters:
 
 import base64
 import logging
-from typing import Optional
-from urllib.parse import parse_qs, urlencode, quote, unquote
+from urllib.parse import parse_qs, quote, unquote
 
 from .models import SpoolEaseTagData, SpoolFromTag, TagType
 
@@ -45,14 +44,10 @@ class SpoolEaseDecoder:
     @staticmethod
     def can_decode(url: str) -> bool:
         """Check if URL is a SpoolEase tag URL."""
-        return (
-            TAG_URL_PREFIX_V1 in url
-            or TAG_URL_PREFIX_V2 in url
-            or TAG_URL_PREFIX_ALT in url
-        )
+        return TAG_URL_PREFIX_V1 in url or TAG_URL_PREFIX_V2 in url or TAG_URL_PREFIX_ALT in url
 
     @staticmethod
-    def decode(url: str, uid_hex: str) -> Optional[SpoolEaseTagData]:
+    def decode(url: str, uid_hex: str) -> SpoolEaseTagData | None:
         """Decode SpoolEase URL to tag data.
 
         Args:
@@ -79,13 +74,13 @@ class SpoolEaseDecoder:
             params = parse_qs(query_string, keep_blank_values=True)
 
             # Helper to get single value from params
-            def get_param(key: str) -> Optional[str]:
+            def get_param(key: str) -> str | None:
                 values = params.get(key, [])
                 if values:
                     return unquote(values[0]) if values[0] else None
                 return None
 
-            def get_int_param(key: str) -> Optional[int]:
+            def get_int_param(key: str) -> int | None:
                 val = get_param(key)
                 if val:
                     try:
@@ -151,19 +146,19 @@ class SpoolEaseEncoder:
     def encode(
         tag_id: str,
         spool_id: str,
-        material: Optional[str] = None,
-        material_subtype: Optional[str] = None,
-        color_code: Optional[str] = None,
-        color_name: Optional[str] = None,
-        brand: Optional[str] = None,
-        weight_label: Optional[int] = None,
-        weight_core: Optional[int] = None,
-        weight_new: Optional[int] = None,
-        slicer_filament_code: Optional[str] = None,
-        slicer_filament_name: Optional[str] = None,
-        note: Optional[str] = None,
-        encode_time: Optional[int] = None,
-        added_time: Optional[int] = None,
+        material: str | None = None,
+        material_subtype: str | None = None,
+        color_code: str | None = None,
+        color_name: str | None = None,
+        brand: str | None = None,
+        weight_label: int | None = None,
+        weight_core: int | None = None,
+        weight_new: int | None = None,
+        slicer_filament_code: str | None = None,
+        slicer_filament_name: str | None = None,
+        note: str | None = None,
+        encode_time: int | None = None,
+        added_time: int | None = None,
     ) -> str:
         """Encode spool data to SpoolEase V2 URL.
 
@@ -209,7 +204,7 @@ class SpoolEaseEncoder:
         tag_id: str,
         spool_id: str,
         spool_data: dict,
-        encode_time: Optional[int] = None,
+        encode_time: int | None = None,
     ) -> str:
         """Create SpoolEase URL from spool database record.
 

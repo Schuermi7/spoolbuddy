@@ -5,23 +5,23 @@ Handles authentication and fetching slicer presets from Bambu Cloud.
 Credentials are persisted to the database for persistence across restarts.
 """
 
-from fastapi import APIRouter, HTTPException
 import logging
 
 from db import get_db
+from fastapi import APIRouter, HTTPException
 from models import (
-    CloudLoginRequest,
-    CloudVerifyRequest,
-    CloudTokenRequest,
-    CloudLoginResponse,
     CloudAuthStatus,
+    CloudLoginRequest,
+    CloudLoginResponse,
+    CloudTokenRequest,
+    CloudVerifyRequest,
     SlicerPreset,
     SlicerSettingsResponse,
 )
 from services.bambu_cloud import (
-    get_cloud_service,
-    BambuCloudError,
     BambuCloudAuthError,
+    BambuCloudError,
+    get_cloud_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,24 +199,28 @@ async def get_slicer_settings(version: str = "02.04.00.70"):
             parsed = []
             # Add private (custom) presets first
             for s in private_settings:
-                parsed.append(SlicerPreset(
-                    setting_id=s.get("setting_id", s.get("id", "")),
-                    name=s.get("name", "Unknown"),
-                    type=our_type,
-                    version=s.get("version"),
-                    user_id=s.get("user_id"),
-                    is_custom=True,
-                ))
+                parsed.append(
+                    SlicerPreset(
+                        setting_id=s.get("setting_id", s.get("id", "")),
+                        name=s.get("name", "Unknown"),
+                        type=our_type,
+                        version=s.get("version"),
+                        user_id=s.get("user_id"),
+                        is_custom=True,
+                    )
+                )
             # Add public (default) presets
             for s in public_settings:
-                parsed.append(SlicerPreset(
-                    setting_id=s.get("setting_id", s.get("id", "")),
-                    name=s.get("name", "Unknown"),
-                    type=our_type,
-                    version=s.get("version"),
-                    user_id=s.get("user_id"),
-                    is_custom=False,
-                ))
+                parsed.append(
+                    SlicerPreset(
+                        setting_id=s.get("setting_id", s.get("id", "")),
+                        name=s.get("name", "Unknown"),
+                        type=our_type,
+                        version=s.get("version"),
+                        user_id=s.get("user_id"),
+                        is_custom=False,
+                    )
+                )
 
             setattr(result, our_type, parsed)
 

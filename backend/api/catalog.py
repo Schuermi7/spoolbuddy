@@ -1,30 +1,32 @@
 """Spool catalog API endpoints."""
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
 
 from db.database import get_db
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 
 class CatalogEntry(BaseModel):
     """Spool catalog entry."""
+
     id: int
     name: str
     weight: int
     is_default: bool
-    created_at: Optional[int] = None
+    created_at: int | None = None
 
 
 class CatalogEntryCreate(BaseModel):
     """Create a spool catalog entry."""
+
     name: str
     weight: int
 
 
 class CatalogEntryUpdate(BaseModel):
     """Update a spool catalog entry."""
+
     name: str
     weight: int
 

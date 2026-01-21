@@ -1,19 +1,19 @@
+from db import get_db
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
-
-from db import get_db
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
 class SettingUpdate(BaseModel):
     """Request to update a setting."""
+
     value: str
 
 
 class AMSThresholds(BaseModel):
     """AMS humidity/temperature threshold settings."""
+
     humidity_good: int = 40  # <= this value is green
     humidity_fair: int = 60  # <= this value is orange, > is red
     temp_good: float = 28.0  # <= this value is green
@@ -70,7 +70,9 @@ async def get_ams_thresholds() -> AMSThresholds:
         humidity_fair=int(humidity_fair) if humidity_fair else DEFAULT_AMS_THRESHOLDS.humidity_fair,
         temp_good=float(temp_good) if temp_good else DEFAULT_AMS_THRESHOLDS.temp_good,
         temp_fair=float(temp_fair) if temp_fair else DEFAULT_AMS_THRESHOLDS.temp_fair,
-        history_retention_days=int(history_retention) if history_retention else DEFAULT_AMS_THRESHOLDS.history_retention_days,
+        history_retention_days=int(history_retention)
+        if history_retention
+        else DEFAULT_AMS_THRESHOLDS.history_retention_days,
     )
 
 

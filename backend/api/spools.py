@@ -1,45 +1,48 @@
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
-from typing import Optional
-
 from db import get_db
+from fastapi import APIRouter, HTTPException, Query
 from models import Spool, SpoolCreate, SpoolUpdate
+from pydantic import BaseModel
 
 
 class SetWeightRequest(BaseModel):
     """Request to set spool weight from scale."""
+
     weight: int  # Current weight in grams (including core)
 
 
 class LogUsageRequest(BaseModel):
     """Request to manually log filament usage."""
+
     weight_used: float  # Grams consumed
-    print_name: Optional[str] = None
-    printer_serial: Optional[str] = None
+    print_name: str | None = None
+    printer_serial: str | None = None
 
 
 class KProfileInput(BaseModel):
     """K-profile to associate with a spool."""
+
     printer_serial: str
-    extruder: Optional[int] = None
-    nozzle_diameter: Optional[str] = None
-    nozzle_type: Optional[str] = None
+    extruder: int | None = None
+    nozzle_diameter: str | None = None
+    nozzle_type: str | None = None
     k_value: str
-    name: Optional[str] = None
-    cali_idx: Optional[int] = None
-    setting_id: Optional[str] = None
+    name: str | None = None
+    cali_idx: int | None = None
+    setting_id: str | None = None
 
 
 class SaveKProfilesRequest(BaseModel):
     """Request to save K-profiles for a spool."""
+
     profiles: list[KProfileInput]
 
 
 class LinkTagRequest(BaseModel):
     """Request to link an NFC tag to an existing spool."""
+
     tag_id: str  # Base64-encoded NFC UID (or hex string)
-    tag_type: Optional[str] = None  # e.g., "bambu", "generic", "unknown"
-    data_origin: Optional[str] = None  # e.g., "nfc_link"
+    tag_type: str | None = None  # e.g., "bambu", "generic", "unknown"
+    data_origin: str | None = None  # e.g., "nfc_link"
 
 
 router = APIRouter(prefix="/spools", tags=["spools"])
@@ -135,12 +138,7 @@ async def link_tag_to_spool(spool_id: str, request: LinkTagRequest):
         await db.clear_spool_tag(archived_spool.id)
 
     # Link the tag
-    updated = await db.link_tag_to_spool(
-        spool_id,
-        request.tag_id,
-        request.tag_type,
-        request.data_origin or "nfc_link"
-    )
+    updated = await db.link_tag_to_spool(spool_id, request.tag_id, request.tag_type, request.data_origin or "nfc_link")
 
     return updated
 

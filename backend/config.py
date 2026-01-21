@@ -1,6 +1,6 @@
-from pydantic_settings import BaseSettings
 from pathlib import Path
 
+from pydantic_settings import BaseSettings
 
 # Application version - update this for each release
 APP_VERSION = "0.1.0"

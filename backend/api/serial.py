@@ -5,8 +5,7 @@ Provides server-side serial port access that works in any browser.
 
 import asyncio
 import logging
-from typing import Optional, List
-from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -18,6 +17,7 @@ router = APIRouter(prefix="/serial", tags=["serial"])
 try:
     import serial
     import serial.tools.list_ports
+
     SERIAL_AVAILABLE = True
 except ImportError:
     SERIAL_AVAILABLE = False
@@ -26,18 +26,20 @@ except ImportError:
 
 class SerialPortInfo(BaseModel):
     """Information about a serial port."""
+
     device: str
     description: str
     hwid: str
-    manufacturer: Optional[str] = None
-    product: Optional[str] = None
-    serial_number: Optional[str] = None
-    vid: Optional[int] = None
-    pid: Optional[int] = None
+    manufacturer: str | None = None
+    product: str | None = None
+    serial_number: str | None = None
+    vid: int | None = None
+    pid: int | None = None
 
 
 class SerialConfig(BaseModel):
     """Serial port configuration."""
+
     port: str
     baudrate: int = 115200
     bytesize: int = 8
@@ -48,10 +50,10 @@ class SerialConfig(BaseModel):
 
 # Global state
 _active_port: Optional["serial.Serial"] = None
-_active_config: Optional[SerialConfig] = None
+_active_config: SerialConfig | None = None
 
 
-@router.get("/ports", response_model=List[SerialPortInfo])
+@router.get("/ports", response_model=list[SerialPortInfo])
 async def list_serial_ports():
     """List available serial ports."""
     if not SERIAL_AVAILABLE:
@@ -60,22 +62,21 @@ async def list_serial_ports():
     ports = []
     for port in serial.tools.list_ports.comports():
         # Filter for likely ESP32 devices
-        ports.append(SerialPortInfo(
-            device=port.device,
-            description=port.description,
-            hwid=port.hwid,
-            manufacturer=port.manufacturer,
-            product=port.product,
-            serial_number=port.serial_number,
-            vid=port.vid,
-            pid=port.pid,
-        ))
+        ports.append(
+            SerialPortInfo(
+                device=port.device,
+                description=port.description,
+                hwid=port.hwid,
+                manufacturer=port.manufacturer,
+                product=port.product,
+                serial_number=port.serial_number,
+                vid=port.vid,
+                pid=port.pid,
+            )
+        )
 
     # Sort by device name, prioritizing USB ports
-    ports.sort(key=lambda p: (
-        0 if "USB" in p.device or "ACM" in p.device else 1,
-        p.device
-    ))
+    ports.sort(key=lambda p: (0 if "USB" in p.device or "ACM" in p.device else 1, p.device))
 
     return ports
 
@@ -122,7 +123,7 @@ async def connect_serial(config: SerialConfig):
         logger.error(f"Permission denied for {config.port}: {e}")
         raise HTTPException(
             status_code=403,
-            detail=f"Permission denied: {config.port}. Run: sudo usermod -aG dialout $USER (then logout/login)"
+            detail=f"Permission denied: {config.port}. Run: sudo usermod -aG dialout $USER (then logout/login)",
         )
     except Exception as e:
         logger.error(f"Failed to connect to {config.port}: {e}")
@@ -171,7 +172,9 @@ async def serial_websocket(websocket: WebSocket):
         return
 
     if not _active_port or not _active_port.is_open:
-        await websocket.send_json({"type": "error", "message": "Not connected to serial port. Connect first via /api/serial/connect"})
+        await websocket.send_json(
+            {"type": "error", "message": "Not connected to serial port. Connect first via /api/serial/connect"}
+        )
         await websocket.close()
         return
 

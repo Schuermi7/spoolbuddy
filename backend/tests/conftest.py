@@ -5,12 +5,12 @@ import logging
 import os
 import sys
 import tempfile
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -83,30 +83,29 @@ def mock_printer_manager():
 @pytest.fixture
 async def async_client(test_db, mock_printer_manager) -> AsyncGenerator[AsyncClient, None]:
     """Create an async test client with test database."""
-    from main import app
     from db import get_db
+    from main import app
 
     # Override database dependency
     async def override_get_db():
         return test_db
 
     # Patch the global db getter
-    with patch("db.get_db", override_get_db), \
-         patch("db.database.get_db", override_get_db), \
-         patch("api.spools.get_db", override_get_db), \
-         patch("api.printers.get_db", override_get_db), \
-         patch("api.cloud.get_db", override_get_db):
-
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test"
-        ) as client:
+    with (
+        patch("db.get_db", override_get_db),
+        patch("db.database.get_db", override_get_db),
+        patch("api.spools.get_db", override_get_db),
+        patch("api.printers.get_db", override_get_db),
+        patch("api.cloud.get_db", override_get_db),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             yield client
 
 
 # ============================================================================
 # Mock External Services
 # ============================================================================
+
 
 @pytest.fixture
 def mock_mqtt_client():
@@ -147,22 +146,19 @@ def mock_cloud_service():
         service = MagicMock()
         service.is_authenticated = False
         service.access_token = None
-        service.login_request = AsyncMock(return_value={
-            "success": False,
-            "needs_verification": True,
-            "message": "Verification code sent"
-        })
-        service.verify_code = AsyncMock(return_value={
-            "success": True,
-            "message": "Login successful"
-        })
+        service.login_request = AsyncMock(
+            return_value={"success": False, "needs_verification": True, "message": "Verification code sent"}
+        )
+        service.verify_code = AsyncMock(return_value={"success": True, "message": "Login successful"})
         service.set_token = MagicMock()
         service.logout = MagicMock()
-        service.get_slicer_settings = AsyncMock(return_value={
-            "filament": {"private": [], "public": []},
-            "printer": {"private": [], "public": []},
-            "print": {"private": [], "public": []},
-        })
+        service.get_slicer_settings = AsyncMock(
+            return_value={
+                "filament": {"private": [], "public": []},
+                "printer": {"private": [], "public": []},
+                "print": {"private": [], "public": []},
+            }
+        )
         mock.return_value = service
         yield service
 
@@ -171,9 +167,11 @@ def mock_cloud_service():
 # Factory Fixtures for Test Data
 # ============================================================================
 
+
 @pytest.fixture
 def spool_factory(test_db):
     """Factory to create test spools."""
+
     async def _create_spool(**kwargs):
         from models import SpoolCreate
 
@@ -224,6 +222,7 @@ def printer_factory(test_db):
 # Sample Data Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def sample_spool_data():
     """Sample spool input data."""
@@ -257,6 +256,7 @@ def sample_printer_data():
 # ============================================================================
 # Log Capture Fixtures
 # ============================================================================
+
 
 class LogCapture(logging.Handler):
     """Handler that captures log records for testing."""
@@ -306,6 +306,7 @@ def capture_logs():
 # MQTT Test Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def sample_mqtt_report():
     """Sample Bambu MQTT print report."""
@@ -319,49 +320,51 @@ def sample_mqtt_report():
             "mc_remaining_time": 45,
             "gcode_file": "/sdcard/test_print.gcode",
             "ams": {
-                "ams": [{
-                    "id": "0",
-                    "humidity": "35",
-                    "humidity_raw": "42",
-                    "temp": "25.5",
-                    "tray": [
-                        {
-                            "id": "0",
-                            "tray_type": "PLA",
-                            "tray_color": "FF0000FF",
-                            "tray_info_idx": "GFSL05",
-                            "k": 0.025,
-                            "remain": 80,
-                            "nozzle_temp_min": 190,
-                            "nozzle_temp_max": 230,
-                        },
-                        {
-                            "id": "1",
-                            "tray_type": "PETG",
-                            "tray_color": "00FF00FF",
-                            "tray_info_idx": "GFPG99",
-                            "k": 0.035,
-                            "remain": 50,
-                            "nozzle_temp_min": 220,
-                            "nozzle_temp_max": 260,
-                        },
-                        {
-                            "id": "2",
-                            "tray_type": "",
-                            "tray_color": "",
-                        },
-                        {
-                            "id": "3",
-                            "tray_type": "ABS",
-                            "tray_color": "0000FFFF",
-                            "tray_info_idx": "GFSA00",
-                            "k": 0.040,
-                            "remain": 20,
-                            "nozzle_temp_min": 240,
-                            "nozzle_temp_max": 280,
-                        },
-                    ]
-                }],
+                "ams": [
+                    {
+                        "id": "0",
+                        "humidity": "35",
+                        "humidity_raw": "42",
+                        "temp": "25.5",
+                        "tray": [
+                            {
+                                "id": "0",
+                                "tray_type": "PLA",
+                                "tray_color": "FF0000FF",
+                                "tray_info_idx": "GFSL05",
+                                "k": 0.025,
+                                "remain": 80,
+                                "nozzle_temp_min": 190,
+                                "nozzle_temp_max": 230,
+                            },
+                            {
+                                "id": "1",
+                                "tray_type": "PETG",
+                                "tray_color": "00FF00FF",
+                                "tray_info_idx": "GFPG99",
+                                "k": 0.035,
+                                "remain": 50,
+                                "nozzle_temp_min": 220,
+                                "nozzle_temp_max": 260,
+                            },
+                            {
+                                "id": "2",
+                                "tray_type": "",
+                                "tray_color": "",
+                            },
+                            {
+                                "id": "3",
+                                "tray_type": "ABS",
+                                "tray_color": "0000FFFF",
+                                "tray_info_idx": "GFSA00",
+                                "k": 0.040,
+                                "remain": 20,
+                                "nozzle_temp_min": 240,
+                                "nozzle_temp_max": 280,
+                            },
+                        ],
+                    }
+                ],
                 "tray_now": "0",
             },
         }
@@ -383,7 +386,7 @@ def sample_dual_nozzle_report():
             "device": {
                 "extruder": {
                     "info": [
-                        {"id": 0, "dia": 0.4, "snow": 1},    # Right nozzle: ams 0, slot 1
+                        {"id": 0, "dia": 0.4, "snow": 1},  # Right nozzle: ams 0, slot 1
                         {"id": 1, "dia": 0.6, "snow": 258},  # Left nozzle: ams 1, slot 2 (0x0102)
                     ],
                     "state": 16,  # Active extruder in bits 4-7 -> (16 >> 4) & 0xF = 1

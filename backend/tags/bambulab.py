@@ -22,7 +22,6 @@ This decoder only parses the data once it's been read from the tag.
 """
 
 import logging
-from typing import Dict, Optional
 
 from .models import BambuLabTagData, SpoolFromTag, TagType
 
@@ -74,7 +73,7 @@ class BambuLabDecoder:
     """Decoder for Bambu Lab RFID tags."""
 
     @staticmethod
-    def decode(uid_hex: str, blocks: Dict[int, bytes]) -> Optional[BambuLabTagData]:
+    def decode(uid_hex: str, blocks: dict[int, bytes]) -> BambuLabTagData | None:
         """Decode Bambu Lab tag blocks to tag data.
 
         Args:
@@ -85,6 +84,7 @@ class BambuLabDecoder:
             Parsed tag data, or None if data is invalid
         """
         try:
+
             def get_cstr(data: bytes) -> str:
                 """Extract null-terminated string from bytes."""
                 null_pos = data.find(b"\x00")
@@ -132,9 +132,7 @@ class BambuLabDecoder:
                 num_colors = int.from_bytes(block16[2:4], "little")
                 if num_colors > 1:
                     # Secondary color is stored reversed
-                    color_rgba2 = bytes([
-                        block16[7], block16[6], block16[5], block16[4]
-                    ]).hex().upper()
+                    color_rgba2 = bytes([block16[7], block16[6], block16[5], block16[4]]).hex().upper()
 
             return BambuLabTagData(
                 tag_id=uid_hex.upper(),
@@ -145,7 +143,7 @@ class BambuLabDecoder:
                 color_rgba=color_rgba,
                 color_rgba2=color_rgba2,
                 spool_weight=spool_weight,
-                blocks={k: v for k, v in blocks.items()},
+                blocks=dict(blocks.items()),
             )
 
         except Exception as e:
@@ -167,7 +165,7 @@ class BambuLabDecoder:
             # Extract subtype from full name
             prefix = f"Bambu {mat_type} "
             if full_name.startswith(prefix):
-                material_subtype = full_name[len(prefix):]
+                material_subtype = full_name[len(prefix) :]
             elif full_name.startswith("Generic"):
                 brand = "Generic"
 

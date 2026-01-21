@@ -1,7 +1,8 @@
 """Integration tests for the updates API."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
 
 
 class TestUpdatesAPI:
@@ -28,7 +29,7 @@ class TestUpdatesAPI:
             "tag_name": "v0.1.0",  # Same as current version
             "body": "Release notes",
             "html_url": "https://github.com/test/releases/v0.1.0",
-            "published_at": "2024-01-01T00:00:00Z"
+            "published_at": "2024-01-01T00:00:00Z",
         }
         mock_httpx_client.get = AsyncMock(return_value=mock_response)
 
@@ -51,7 +52,7 @@ class TestUpdatesAPI:
             "tag_name": "v2.0.0",  # Newer than current
             "body": "New features!",
             "html_url": "https://github.com/test/releases/v2.0.0",
-            "published_at": "2024-12-01T00:00:00Z"
+            "published_at": "2024-12-01T00:00:00Z",
         }
         mock_httpx_client.get = AsyncMock(return_value=mock_response)
 
@@ -109,7 +110,7 @@ class TestUpdatesAPI:
 
     async def test_apply_update(self, async_client):
         """Test applying an update."""
-        with patch("api.updates._apply_update_task") as mock_task:
+        with patch("api.updates._apply_update_task"):
             response = await async_client.post("/api/updates/apply", json={})
             assert response.status_code == 200
 
