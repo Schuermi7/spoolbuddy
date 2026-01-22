@@ -307,6 +307,7 @@ int get_selected_printer_index(void);
 bool is_selected_printer_dual_nozzle(void);
 void reset_notification_state(void);  // Call before deleting screens
 void reset_backend_ui_state(void);    // Reset all dynamic UI state when screens deleted
+void wire_ams_slot_click_handlers(void);  // Make AMS slots clickable (simulator only)
 
 // =============================================================================
 // Module Functions - ui_update.c

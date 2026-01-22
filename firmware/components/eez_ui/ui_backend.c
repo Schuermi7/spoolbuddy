@@ -21,6 +21,7 @@ static const char *TAG = "ui_backend";
 #else
 // Simulator: use libcurl backend with compatibility API
 #include "../backend_client.h"
+#include "ui_ams_slot_modal.h"
 #define ESP_LOGI(tag, fmt, ...) printf("[%s] " fmt "\n", tag, ##__VA_ARGS__)
 static const char *TAG = "ui_backend";
 // Variables shared with ui.c
@@ -2498,6 +2499,185 @@ void wire_scan_printer_dropdown(void) {
                            LV_EVENT_VALUE_CHANGED, NULL);
     }
 }
+
+// =============================================================================
+// AMS Slot Click Handlers (opens Configure Slot modal)
+// =============================================================================
+
+#ifndef ESP_PLATFORM  // Simulator only for now
+
+// Struct to hold slot info for click handler
+typedef struct {
+    int ams_id;
+    int tray_id;
+    int tray_count;
+} AmsSlotUserData;
+
+// Static storage for user data (slots are fixed, so we can use static storage)
+static AmsSlotUserData ams_a_slot_data[4] = {{0, 0, 4}, {0, 1, 4}, {0, 2, 4}, {0, 3, 4}};
+static AmsSlotUserData ams_b_slot_data[4] = {{1, 0, 4}, {1, 1, 4}, {1, 2, 4}, {1, 3, 4}};
+static AmsSlotUserData ams_c_slot_data[4] = {{2, 0, 4}, {2, 1, 4}, {2, 2, 4}, {2, 3, 4}};
+static AmsSlotUserData ams_d_slot_data[4] = {{3, 0, 4}, {3, 1, 4}, {3, 2, 4}, {3, 3, 4}};
+static AmsSlotUserData ams_ht_a_slot_data = {128, 0, 1};
+static AmsSlotUserData ams_ext1_slot_data = {254, 0, 1};
+static AmsSlotUserData ams_ext2_slot_data = {255, 0, 1};
+
+// Success callback - trigger AMS display refresh
+static void ams_slot_config_success(void) {
+    ESP_LOGI(TAG, "AMS slot configuration succeeded, refreshing display");
+    needs_data_refresh = true;
+}
+
+// Click handler for AMS slots
+static void ams_slot_click_handler(lv_event_t *e) {
+    AmsSlotUserData *slot_data = (AmsSlotUserData *)lv_event_get_user_data(e);
+    if (!slot_data) return;
+
+    // Get printer serial
+    BackendPrinterInfo printer_info = {0};
+    if (backend_get_printer(selected_printer_index, &printer_info) != 0) {
+        ESP_LOGI(TAG, "Failed to get printer info for slot click");
+        return;
+    }
+
+    // Get current tray info
+    AmsUnitCInfo ams_info = {0};
+    bool found_ams = false;
+    int ams_count = backend_get_ams_count(selected_printer_index);
+    for (int i = 0; i < ams_count; i++) {
+        if (backend_get_ams_unit(selected_printer_index, i, &ams_info) == 0) {
+            if (ams_info.id == slot_data->ams_id) {
+                found_ams = true;
+                break;
+            }
+        }
+    }
+
+    const char *tray_type = NULL;
+    char tray_color[16] = "";
+
+    if (found_ams && slot_data->tray_id < ams_info.tray_count) {
+        tray_type = ams_info.trays[slot_data->tray_id].tray_type;
+        if (ams_info.trays[slot_data->tray_id].tray_color != 0) {
+            // Convert RGBA to hex string
+            uint32_t rgba = ams_info.trays[slot_data->tray_id].tray_color;
+            uint8_t r = (rgba >> 24) & 0xFF;
+            uint8_t g = (rgba >> 16) & 0xFF;
+            uint8_t b = (rgba >> 8) & 0xFF;
+            snprintf(tray_color, sizeof(tray_color), "%02X%02X%02X", r, g, b);
+        }
+    }
+
+    // Get extruder_id from AMS unit (-1 if not found or unknown)
+    int extruder_id = found_ams ? ams_info.extruder : -1;
+
+    ESP_LOGI(TAG, "Opening AMS slot config: printer=%s, ams=%d, tray=%d, extruder=%d, type=%s, color=%s",
+             printer_info.serial, slot_data->ams_id, slot_data->tray_id, extruder_id,
+             tray_type ? tray_type : "empty", tray_color);
+
+    ui_ams_slot_modal_open(printer_info.serial, slot_data->ams_id, slot_data->tray_id,
+                           slot_data->tray_count, extruder_id,
+                           tray_type, tray_color[0] ? tray_color : NULL,
+                           ams_slot_config_success);
+}
+
+/**
+ * @brief Wire up AMS slot click handlers on AMS overview screen
+ *
+ * Makes each AMS slot clickable to open the configuration modal.
+ */
+void wire_ams_slot_click_handlers(void) {
+    // AMS A slots
+    lv_obj_t *ams_a_slots[] = {
+        objects.ams_screen_ams_panel_ams_a_slot_1,
+        objects.ams_screen_ams_panel_ams_a_slot_2,
+        objects.ams_screen_ams_panel_ams_a_slot_3,
+        objects.ams_screen_ams_panel_ams_a_slot_4
+    };
+    for (int i = 0; i < 4; i++) {
+        if (ams_a_slots[i]) {
+            lv_obj_add_flag(ams_a_slots[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(ams_a_slots[i], ams_slot_click_handler, LV_EVENT_CLICKED,
+                               &ams_a_slot_data[i]);
+        }
+    }
+
+    // AMS B slots
+    lv_obj_t *ams_b_slots[] = {
+        objects.ams_screen_ams_panel_ams_b_slot_1,
+        objects.ams_screen_ams_panel_ams_b_slot_2,
+        objects.ams_screen_ams_panel_ams_b_slot_3,
+        objects.ams_screen_ams_panel_ams_b_slot_4
+    };
+    for (int i = 0; i < 4; i++) {
+        if (ams_b_slots[i]) {
+            lv_obj_add_flag(ams_b_slots[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(ams_b_slots[i], ams_slot_click_handler, LV_EVENT_CLICKED,
+                               &ams_b_slot_data[i]);
+        }
+    }
+
+    // AMS C slots (if they exist)
+    lv_obj_t *ams_c_slots[] = {
+        objects.ams_screen_ams_panel_ams_c_slot_1,
+        objects.ams_screen_ams_panel_ams_c_slot_2,
+        objects.ams_screen_ams_panel_ams_c_slot_3,
+        objects.ams_screen_ams_panel_ams_c_slot_4
+    };
+    for (int i = 0; i < 4; i++) {
+        if (ams_c_slots[i]) {
+            lv_obj_add_flag(ams_c_slots[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(ams_c_slots[i], ams_slot_click_handler, LV_EVENT_CLICKED,
+                               &ams_c_slot_data[i]);
+        }
+    }
+
+    // AMS D slots (note: typo in EEZ project - "amd_d" instead of "ams_d")
+    lv_obj_t *ams_d_slots[] = {
+        objects.ams_screen_ams_panel_amd_d_slot_1,
+        objects.ams_screen_ams_panel_amd_d_slot_2,
+        objects.ams_screen_ams_panel_amd_d_slot_3,
+        objects.ams_screen_ams_panel_amd_d_slot_4
+    };
+    for (int i = 0; i < 4; i++) {
+        if (ams_d_slots[i]) {
+            lv_obj_add_flag(ams_d_slots[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(ams_d_slots[i], ams_slot_click_handler, LV_EVENT_CLICKED,
+                               &ams_d_slot_data[i]);
+        }
+    }
+
+    // AMS HT-A slot (single slot AMS)
+    if (objects.ams_screen_ams_panel_ht_a_slot) {
+        lv_obj_add_flag(objects.ams_screen_ams_panel_ht_a_slot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(objects.ams_screen_ams_panel_ht_a_slot, ams_slot_click_handler,
+                           LV_EVENT_CLICKED, &ams_ht_a_slot_data);
+    }
+
+    // AMS HT-B slot (single slot AMS)
+    static AmsSlotUserData ams_ht_b_slot_data = {129, 0, 1};
+    if (objects.ams_screen_ams_panel_ht_b_slot) {
+        lv_obj_add_flag(objects.ams_screen_ams_panel_ht_b_slot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(objects.ams_screen_ams_panel_ht_b_slot, ams_slot_click_handler,
+                           LV_EVENT_CLICKED, &ams_ht_b_slot_data);
+    }
+
+    // External slots - use the panel itself as the clickable area
+    if (objects.ams_screen_ams_panel_ext_1) {
+        lv_obj_add_flag(objects.ams_screen_ams_panel_ext_1, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(objects.ams_screen_ams_panel_ext_1, ams_slot_click_handler,
+                           LV_EVENT_CLICKED, &ams_ext1_slot_data);
+    }
+    if (objects.ams_screen_ams_panel_ext_2) {
+        lv_obj_add_flag(objects.ams_screen_ams_panel_ext_2, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(objects.ams_screen_ams_panel_ext_2, ams_slot_click_handler,
+                           LV_EVENT_CLICKED, &ams_ext2_slot_data);
+    }
+
+    ESP_LOGI(TAG, "Wired AMS slot click handlers");
+}
+
+#endif // !ESP_PLATFORM
 
 /**
  * @brief Initialize main screen AMS display

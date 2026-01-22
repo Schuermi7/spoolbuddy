@@ -15,7 +15,7 @@ extern "C" {
 
 // Configuration
 #define BACKEND_DEFAULT_URL "http://localhost:3000"
-#define BACKEND_POLL_INTERVAL_MS 2000
+#define BACKEND_POLL_INTERVAL_MS 500  // Reduced for faster AMS updates
 
 // AMS Tray data
 typedef struct {
@@ -433,6 +433,122 @@ int backend_poll_assignment_completions(double since_timestamp, AssignmentComple
 bool backend_set_tray_calibration(const char *printer_serial, int ams_id, int tray_id,
                                    int cali_idx, const char *filament_id,
                                    const char *nozzle_diameter);
+
+// =============================================================================
+// AMS Slot Configuration API (for Configure Slot modal)
+// =============================================================================
+
+// Slicer filament preset (from Bambu Cloud)
+typedef struct {
+    char setting_id[64];    // Full setting ID (e.g., "GFSL05_07" or PFUS-xxx for custom)
+    char name[64];          // Preset name (e.g., "Bambu PLA Basic")
+    char type[16];          // Type: "filament", "printer", "process"
+    bool is_custom;         // true for user's custom presets
+} SlicerPreset;
+
+// Get slicer filament presets from Bambu Cloud
+// Returns number of presets found (up to max_count), fills array
+// Returns -1 if not authenticated or error
+int backend_get_slicer_presets(SlicerPreset *presets, int max_count);
+
+// Get detail for a specific slicer preset (to get filament_id for custom presets)
+// Returns filament_id on success, NULL on failure
+// The returned string is valid until the next call
+const char *backend_get_preset_filament_id(const char *setting_id);
+
+// Preset detail from cloud API (for user presets that inherit from Bambu presets)
+typedef struct {
+    char filament_id[64];   // Direct filament_id (e.g., "P285e239" for some user presets)
+    char base_id[64];       // Base preset this inherits from (e.g., "GFSL05_09")
+    bool has_filament_id;
+    bool has_base_id;
+} PresetDetail;
+
+// Get detailed preset info including base_id for user presets
+// Returns true on success, false on failure
+bool backend_get_preset_detail(const char *setting_id, PresetDetail *detail);
+
+// K-profile (calibration profile) from printer
+typedef struct {
+    int cali_idx;           // Calibration index
+    char name[64];          // Profile name
+    char k_value[16];       // K-factor value as string
+    char filament_id[32];   // Filament ID this profile is for
+    char setting_id[64];    // Setting ID for slicer
+    int extruder_id;        // 0=right, 1=left (-1=unknown)
+    int nozzle_temp;        // Nozzle temperature for this profile
+} KProfileInfo;
+
+// Get K-profiles (calibration profiles) for a printer
+// Parameters:
+//   printer_serial: Printer serial number
+//   nozzle_diameter: Nozzle size (e.g., "0.4")
+//   profiles: Array to fill with profiles
+//   max_count: Maximum number of profiles to return
+// Returns number of profiles found, -1 on error
+int backend_get_k_profiles(const char *printer_serial, const char *nozzle_diameter,
+                           KProfileInfo *profiles, int max_count);
+
+// Set filament in an AMS slot (direct configuration, no spool lookup)
+// Parameters:
+//   printer_serial: Printer serial number
+//   ams_id: AMS unit ID
+//   tray_id: Tray ID within AMS
+//   tray_info_idx: Filament preset ID short format (e.g., "GFL05")
+//   setting_id: Full setting ID with version (e.g., "GFSL05_07")
+//   tray_type: Material type (e.g., "PLA")
+//   tray_sub_brands: Preset name for slicer (e.g., "Bambu PLA Basic")
+//   tray_color: RGBA hex (e.g., "FF0000FF")
+//   nozzle_temp_min: Min nozzle temp
+//   nozzle_temp_max: Max nozzle temp
+// Returns true on success
+bool backend_set_slot_filament(const char *printer_serial, int ams_id, int tray_id,
+                                const char *tray_info_idx, const char *setting_id,
+                                const char *tray_type, const char *tray_sub_brands,
+                                const char *tray_color, int nozzle_temp_min, int nozzle_temp_max);
+
+// Set calibration (K-profile) for an AMS slot with full parameters
+// Parameters:
+//   printer_serial: Printer serial number
+//   ams_id: AMS unit ID
+//   tray_id: Tray ID within AMS
+//   cali_idx: Calibration index (-1 for default)
+//   filament_id: Filament preset ID
+//   setting_id: Setting ID for slicer compatibility
+//   nozzle_diameter: Nozzle size
+//   k_value: Direct K value to set (0.0 = skip)
+//   nozzle_temp: Nozzle temp for extrusion_cali_set
+// Returns true on success
+bool backend_set_slot_calibration(const char *printer_serial, int ams_id, int tray_id,
+                                   int cali_idx, const char *filament_id, const char *setting_id,
+                                   const char *nozzle_diameter, float k_value, int nozzle_temp);
+
+// Reset/clear an AMS slot (triggers RFID re-read)
+// Returns true on success
+bool backend_reset_slot(const char *printer_serial, int ams_id, int tray_id);
+
+// =============================================================================
+// Color Catalog API
+// =============================================================================
+
+// Color catalog entry from database
+typedef struct {
+    int id;
+    char manufacturer[64];
+    char color_name[64];
+    char hex_color[16];     // e.g., "#FF0000"
+    char material[32];      // e.g., "PLA" (may be empty)
+} ColorCatalogEntry;
+
+// Search color catalog by manufacturer and/or material
+// Parameters:
+//   manufacturer: Filter by manufacturer name (can be NULL)
+//   material: Filter by material type (can be NULL)
+//   colors: Array to fill with matching colors
+//   max_count: Maximum number of colors to return
+// Returns number of colors found, -1 on error
+int backend_search_colors(const char *manufacturer, const char *material,
+                          ColorCatalogEntry *colors, int max_count);
 
 // =============================================================================
 // Printer Management API

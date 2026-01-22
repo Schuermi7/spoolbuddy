@@ -251,9 +251,16 @@ export function compareWeights(
 ): { scaleWeight: number | null; calculatedWeight: number; difference: number | null; isMatch: boolean | null } {
   const calculatedWeight = getGrossWeight(spool)
   const scaleWeight = spool.weight_current ?? null
+  const coreWeight = spool.core_weight || 0
 
   if (scaleWeight === null) {
     return { scaleWeight: null, calculatedWeight, difference: null, isMatch: null }
+  }
+
+  // Special case: if scale < core_weight, spool is empty or not on scale
+  // Treat as match since sync can't fix this (calculated gross can't be < core_weight)
+  if (scaleWeight < coreWeight) {
+    return { scaleWeight, calculatedWeight: coreWeight, difference: scaleWeight - coreWeight, isMatch: true }
   }
 
   const difference = scaleWeight - calculatedWeight

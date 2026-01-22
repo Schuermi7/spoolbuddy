@@ -866,10 +866,13 @@ class Database:
         if not spool:
             return None
 
-        # Use Default Core Weight from settings (same as frontend dashboard)
-        # This ensures sync calculations match what the user sees
-        default_core_weight_str = await self.get_setting("spoolbuddy-default-core-weight")
-        default_core_weight = int(default_core_weight_str) if default_core_weight_str else 250
+        # Use spool's core_weight if set, otherwise fall back to default from settings
+        # This matches the frontend calculation in getGrossWeight()
+        if spool.core_weight is not None and spool.core_weight > 0:
+            core_weight = spool.core_weight
+        else:
+            default_core_weight_str = await self.get_setting("spoolbuddy-default-core-weight")
+            core_weight = int(default_core_weight_str) if default_core_weight_str else 250
 
         # Calculate what weight_used should be to match the scale reading
         # gross_weight = core_weight + net_weight
@@ -877,7 +880,13 @@ class Database:
         # After sync: gross = core_weight + (label_weight - weight_used_new - 0)
         # So: weight_used_new = core_weight + label_weight - gross
         label_weight = spool.label_weight or 0
-        weight_used_new = max(0, default_core_weight + label_weight - weight)
+
+        # Special case: if scale reading < core_weight, spool is empty (or not on scale)
+        # In this case, set weight_used = label_weight (100% consumed)
+        if weight < core_weight:
+            weight_used_new = label_weight
+        else:
+            weight_used_new = max(0, core_weight + label_weight - weight)
 
         now = int(time.time())
         await self.conn.execute(

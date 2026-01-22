@@ -56,6 +56,8 @@ interface ConfigureAmsSlotModalProps {
   calibrations: CalibrationProfile[]
   currentKValue: number | null
   onSuccess?: () => void
+  extruderId?: number | null  // 0=right, 1=left for dual nozzle, undefined/-1 for single nozzle
+  nozzleCount?: number        // 1=single nozzle, 2=dual nozzle (H2C/H2D)
 }
 
 // Known filament material types
@@ -137,7 +139,10 @@ export function ConfigureAmsSlotModal({
   calibrations,
   currentKValue: _currentKValue,
   onSuccess,
+  extruderId,
+  nozzleCount = 1,
 }: ConfigureAmsSlotModalProps) {
+  const isDualNozzle = nozzleCount >= 2
   const [filamentPresets, setFilamentPresets] = useState<SlicerPreset[]>([])
   const [selectedPresetId, setSelectedPresetId] = useState<string>('')
   const [selectedCaliIdx, setSelectedCaliIdx] = useState<number>(-1)
@@ -204,12 +209,25 @@ export function ConfigureAmsSlotModal({
     }
   }, [isOpen, handleKeyDown])
 
-  // Filter presets based on search
+  // Filter presets based on search (AND logic - all words must match)
   const filteredPresets = useMemo(() => {
     if (!filamentPresets) return []
-    const query = searchQuery.toLowerCase()
+    const query = searchQuery.toLowerCase().trim()
+    if (!query) return filamentPresets.sort((a, b) => {
+      const aIsUser = isUserPreset(a.setting_id)
+      const bIsUser = isUserPreset(b.setting_id)
+      if (aIsUser && !bIsUser) return -1
+      if (!aIsUser && bIsUser) return 1
+      return a.name.localeCompare(b.name)
+    })
+
+    // Split query into words and require ALL to match
+    const words = query.split(/\s+/).filter(w => w.length > 0)
     return filamentPresets
-      .filter(p => !query || p.name.toLowerCase().includes(query))
+      .filter(p => {
+        const name = p.name.toLowerCase()
+        return words.every(word => name.includes(word))
+      })
       .sort((a, b) => {
         const aIsUser = isUserPreset(a.setting_id)
         const bIsUser = isUserPreset(b.setting_id)
@@ -238,7 +256,7 @@ export function ConfigureAmsSlotModal({
     }
   }, [selectedPresetId, filamentPresets])
 
-  // Filter calibrations based on selected preset and deduplicate
+  // Filter calibrations based on selected preset and extruder
   const matchingCalibrations = useMemo(() => {
     if (!calibrations || !selectedPresetInfo) return []
 
@@ -248,34 +266,49 @@ export function ConfigureAmsSlotModal({
 
     if (!upperMaterial || upperMaterial.length < 2) return []
 
-    const filtered = calibrations.filter(cal => {
-      const profileName = (cal.name || cal.filament_id || '').toUpperCase()
+    // First filter: match by brand+material
+    // Check BOTH name and filament_id fields for matches
+    // Brand words must ALL match (AND logic) but can be in any order
+    const brandWords = upperBrand ? upperBrand.split(/\s+/).filter(w => w.length > 0) : []
 
-      if (upperBrand) {
-        if (!profileName.includes(upperBrand)) return false
-        if (!profileName.includes(upperMaterial)) return false
-        return true
+    let filtered = calibrations.filter(cal => {
+      const upperName = (cal.name || '').toUpperCase()
+      const upperFilamentId = (cal.filament_id || '').toUpperCase()
+
+      // Check if all brand words are present (AND logic, any order)
+      const nameMatchesBrand = brandWords.length === 0 || brandWords.every(word => upperName.includes(word))
+      const nameMatchesMaterial = upperName.includes(upperMaterial)
+      const filamentIdMatchesBrand = brandWords.length === 0 || brandWords.every(word => upperFilamentId.includes(word))
+      const filamentIdMatchesMaterial = upperFilamentId.includes(upperMaterial)
+
+      if (brandWords.length > 0) {
+        // Brand specified: need all brand words AND material to match (in name OR filament_id)
+        const nameMatches = nameMatchesBrand && nameMatchesMaterial
+        const filamentIdMatches = filamentIdMatchesBrand && filamentIdMatchesMaterial
+        return nameMatches || filamentIdMatches
       }
 
-      if (profileName.includes(fullName.toUpperCase())) return true
-      if (profileName.includes(upperMaterial)) return true
+      // No brand: just match material (or full name)
+      const upperFullName = fullName.toUpperCase()
+      if (upperName.includes(upperFullName) || upperFilamentId.includes(upperFullName)) return true
+      if (nameMatchesMaterial || filamentIdMatchesMaterial) return true
 
       return false
     })
 
-    // Deduplicate profiles with same name and k_value (multi-nozzle printers have duplicates)
-    // Prefer extruder_id=1 (High Flow) profiles as they're more commonly used on H2D
-    const seen = new Map<string, CalibrationProfile>()
-    for (const profile of filtered) {
-      const key = `${profile.name}|${profile.k_value}`
-      const existing = seen.get(key)
-      // Prefer extruder_id=1 (High Flow) over extruder_id=0
-      if (!existing || (profile.extruder_id === 1 && existing.extruder_id !== 1)) {
-        seen.set(key, profile)
-      }
+    // For dual-nozzle printers: filter by extruder_id
+    // extruder 0 = right nozzle, extruder 1 = left nozzle
+    if (isDualNozzle && extruderId !== undefined && extruderId !== null && extruderId >= 0) {
+      filtered = filtered.filter(cal => {
+        // Allow universal profiles (extruder_id undefined, null, or -1) and profiles matching this extruder
+        if (cal.extruder_id === undefined || cal.extruder_id === null || cal.extruder_id < 0) return true
+        return cal.extruder_id === extruderId
+      })
     }
-    return Array.from(seen.values())
-  }, [calibrations, selectedPresetInfo])
+    // No deduplication - show all matching K-profiles (matches LVGL behavior)
+
+    return filtered
+  }, [calibrations, selectedPresetInfo, isDualNozzle, extruderId])
 
   // Auto-select first matching calibration when preset changes
   useEffect(() => {
@@ -294,10 +327,14 @@ export function ConfigureAmsSlotModal({
         return
       }
 
+      // Use only first word of brand as manufacturer (e.g., "Overture Matte" -> "Overture")
+      // Manufacturer names are typically single words
+      const manufacturer = selectedPresetInfo.brand?.split(/\s+/)[0] || undefined
+
       setCatalogColorsLoading(true)
       try {
         const colors = await api.searchColors(
-          selectedPresetInfo.brand || undefined,
+          manufacturer,
           selectedPresetInfo.material || undefined
         )
         setCatalogColors(colors)
@@ -406,6 +443,16 @@ export function ConfigureAmsSlotModal({
       else if (mat.includes('PC')) { tempMin = 260; tempMax = 300 }
       else if (mat.includes('PA') || mat.includes('NYLON')) { tempMin = 250; tempMax = 290 }
 
+      // Get selected K-profile (needed before setting filament to ensure tray_info_idx matches)
+      const selectedCal = calibrations.find(c => c.cali_idx === selectedCaliIdx)
+
+      // IMPORTANT: If a K-profile is selected, use its filament_id as tray_info_idx
+      // The printer requires tray_info_idx to match the K-profile's filament_id for calibration to apply
+      if (selectedCal?.filament_id) {
+        console.log(`Using K-profile filament_id for tray_info_idx: ${selectedCal.filament_id}`)
+        trayInfoIdx = selectedCal.filament_id
+      }
+
       // Configure the slot filament
       await api.setSlotFilament(printerSerial, {
         ams_id: slotInfo.amsId,
@@ -420,7 +467,6 @@ export function ConfigureAmsSlotModal({
       })
 
       // Set calibration (K profile)
-      const selectedCal = calibrations.find(c => c.cali_idx === selectedCaliIdx)
       const kValue = selectedCal?.k_value || 0
       await api.setCalibration(printerSerial, slotInfo.amsId, slotInfo.trayId, {
         cali_idx: selectedCaliIdx,
@@ -500,6 +546,13 @@ export function ConfigureAmsSlotModal({
               <span class="text-[var(--text-primary)] font-medium">
                 {getAmsLabel(slotInfo.amsId, slotInfo.trayCount)} Slot {slotInfo.trayId + 1}
               </span>
+              {isDualNozzle && extruderId !== undefined && extruderId !== null && extruderId >= 0 && (
+                <span class={`px-1.5 py-0.5 text-xs rounded ${
+                  extruderId === 1 ? 'bg-blue-600 text-white' : 'bg-purple-600 text-white'
+                }`}>
+                  {extruderId === 1 ? 'L' : 'R'}
+                </span>
+              )}
               {slotInfo.trayType && (
                 <span class="text-[var(--text-muted)]">({slotInfo.trayType})</span>
               )}
@@ -611,7 +664,7 @@ export function ConfigureAmsSlotModal({
                       <Palette class="w-3 h-3" />
                       <span>
                         {selectedPresetInfo?.brand || selectedPresetInfo?.material
-                          ? `Colors for ${[selectedPresetInfo.brand, selectedPresetInfo.material].filter(Boolean).join(' ')}`
+                          ? `Colors for ${[selectedPresetInfo.brand?.split(/\s+/)[0], selectedPresetInfo.material].filter(Boolean).join(' ')}`
                           : 'Catalog colors'}
                       </span>
                       {catalogColorsLoading && <span class="animate-pulse">...</span>}
@@ -640,34 +693,36 @@ export function ConfigureAmsSlotModal({
                   </div>
                 )}
 
-                {/* Basic colors */}
-                <div class="flex flex-wrap gap-1.5 mb-2">
-                  {QUICK_COLORS_BASIC.map((color) => (
+                {/* Basic colors - only show if no catalog colors found */}
+                {catalogColors.length === 0 && (
+                  <div class="flex flex-wrap gap-1.5 mb-2">
+                    {QUICK_COLORS_BASIC.map((color) => (
+                      <button
+                        key={color.hex}
+                        onClick={() => {
+                          setColorHex(color.hex)
+                          setColorInput(color.name)
+                        }}
+                        class={`w-7 h-7 rounded-md border-2 transition-all ${
+                          colorHex === color.hex
+                            ? 'border-[var(--accent-color)] scale-110'
+                            : 'border-white/20 hover:border-white/40'
+                        }`}
+                        style={{ backgroundColor: `#${color.hex}` }}
+                        title={color.name}
+                      />
+                    ))}
                     <button
-                      key={color.hex}
-                      onClick={() => {
-                        setColorHex(color.hex)
-                        setColorInput(color.name)
-                      }}
-                      class={`w-7 h-7 rounded-md border-2 transition-all ${
-                        colorHex === color.hex
-                          ? 'border-[var(--accent-color)] scale-110'
-                          : 'border-white/20 hover:border-white/40'
-                      }`}
-                      style={{ backgroundColor: `#${color.hex}` }}
-                      title={color.name}
-                    />
-                  ))}
-                  <button
-                    onClick={() => setShowExtendedColors(!showExtendedColors)}
-                    class="w-7 h-7 rounded-md border-2 border-white/20 hover:border-white/40 flex items-center justify-center text-white/60 hover:text-white/80 transition-all text-xs"
-                    title={showExtendedColors ? 'Show less colors' : 'Show more colors'}
-                  >
-                    {showExtendedColors ? '−' : '+'}
-                  </button>
-                </div>
-                {/* Extended colors (collapsible) */}
-                {showExtendedColors && (
+                      onClick={() => setShowExtendedColors(!showExtendedColors)}
+                      class="w-7 h-7 rounded-md border-2 border-white/20 hover:border-white/40 flex items-center justify-center text-white/60 hover:text-white/80 transition-all text-xs"
+                      title={showExtendedColors ? 'Show less colors' : 'Show more colors'}
+                    >
+                      {showExtendedColors ? '−' : '+'}
+                    </button>
+                  </div>
+                )}
+                {/* Extended colors (collapsible) - only show if no catalog colors */}
+                {catalogColors.length === 0 && showExtendedColors && (
                   <div class="flex flex-wrap gap-1.5 mb-2">
                     {QUICK_COLORS_EXTENDED.map((color) => (
                       <button

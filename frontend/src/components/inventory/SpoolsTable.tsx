@@ -411,8 +411,10 @@ export function SpoolsTable({
                 <>
                   <AlertTriangle class="w-3 h-3" />
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation()
+                      e.preventDefault()
                       onSyncWeight?.(spool)
                     }}
                     class="p-1 hover:bg-[var(--accent-color)]/20 rounded transition-colors text-[var(--accent-color)]"

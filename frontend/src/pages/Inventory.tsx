@@ -206,7 +206,8 @@ export function Inventory() {
     try {
       await api.setSpoolWeight(spool.id, spool.weight_current);
       await loadSpools();
-      showToast('success', `Synced "${spool.color_name || spool.material}" to scale weight`);
+      const spoolName = [spool.brand, spool.material, spool.color_name].filter(Boolean).join(' ');
+      showToast('success', `Synced "${spoolName}" to scale weight`);
     } catch (e) {
       showToast('error', e instanceof Error ? e.message : 'Failed to sync weight');
     }

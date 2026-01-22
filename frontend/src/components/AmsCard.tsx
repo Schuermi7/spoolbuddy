@@ -380,9 +380,11 @@ interface SlotMenuProps {
   tray?: AmsTray | null;
   trayCount?: number;
   isReading?: boolean; // True when slot is being read (RFID scanning)
+  extruderId?: number | null; // 0=right, 1=left for dual nozzle printers
+  numExtruders?: number; // 1=single, 2=dual nozzle
 }
 
-function SlotMenu({ printerSerial, amsId, trayId, calibrations, currentKValue, tray, trayCount = 4, isReading = false }: SlotMenuProps) {
+function SlotMenu({ printerSerial, amsId, trayId, calibrations, currentKValue, tray, trayCount = 4, isReading = false, extruderId, numExtruders = 1 }: SlotMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
@@ -429,6 +431,8 @@ function SlotMenu({ printerSerial, amsId, trayId, calibrations, currentKValue, t
         }}
         calibrations={calibrations}
         currentKValue={currentKValue}
+        extruderId={extruderId}
+        nozzleCount={numExtruders}
       />
     </>
   );
@@ -538,6 +542,8 @@ function RegularAmsCard({ unit, numExtruders = 1, printerSerial, calibrations = 
                     tray={tray}
                     trayCount={4}
                     isReading={isTrayReading(unit.id, idx, trayReadingBits)}
+                    extruderId={unit.extruder}
+                    numExtruders={numExtruders}
                   />
                 </div>
               )}
@@ -636,6 +642,8 @@ function HtAmsCard({ unit, numExtruders = 1, printerSerial, calibrations = [], t
                 tray={tray}
                 trayCount={1}
                 isReading={isTrayReading(unit.id, 0, trayReadingBits)}
+                extruderId={unit.extruder}
+                numExtruders={numExtruders}
               />
             )}
           </div>
@@ -737,6 +745,8 @@ export function ExternalSpool({ tray, position = "left", numExtruders = 1, print
                 tray={tray}
                 trayCount={1}
                 isReading={isTrayReading(amsId, 0, trayReadingBits)}
+                extruderId={isDualNozzle ? (position === "left" ? 1 : 0) : undefined}
+                numExtruders={numExtruders}
               />
             )}
           </div>

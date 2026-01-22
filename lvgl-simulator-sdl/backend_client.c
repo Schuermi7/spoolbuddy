@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 #include <curl/curl.h>
 
 // cJSON header location varies: Homebrew uses cjson/cJSON.h, FetchContent uses cJSON.h
@@ -21,6 +22,7 @@
 static BackendState g_state = {0};
 static char g_base_url[256] = BACKEND_DEFAULT_URL;
 static CURL *g_curl = NULL;
+static pthread_mutex_t g_curl_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // NFC state (synced from real device via backend, or toggled with 'N' key)
 static bool g_nfc_initialized = true;
@@ -270,6 +272,9 @@ static cJSON *fetch_json(const char *url) {
     buf.data = malloc(1);
     buf.size = 0;
 
+    // Lock mutex for curl operations
+    pthread_mutex_lock(&g_curl_mutex);
+
     // Reset curl options to ensure GET (previous calls may have set POST)
     curl_easy_reset(g_curl);
     curl_easy_setopt(g_curl, CURLOPT_URL, url);
@@ -279,6 +284,8 @@ static cJSON *fetch_json(const char *url) {
     curl_easy_setopt(g_curl, CURLOPT_CONNECTTIMEOUT, 1L);
 
     CURLcode res = curl_easy_perform(g_curl);
+
+    pthread_mutex_unlock(&g_curl_mutex);
 
     if (res != CURLE_OK) {
         free(buf.data);
@@ -1690,6 +1697,488 @@ bool backend_set_tray_calibration(const char *printer_serial, int ams_id, int tr
 }
 
 // =============================================================================
+// AMS Slot Configuration API
+// =============================================================================
+
+// Static buffer for preset filament_id lookup result
+static char g_preset_filament_id[64] = {0};
+
+int backend_get_slicer_presets(SlicerPreset *presets, int max_count) {
+    if (!presets || max_count <= 0 || !g_curl) {
+        printf("[backend] get_slicer_presets: invalid params\n");
+        return -1;
+    }
+
+    // GET /api/cloud/settings
+    char url[256];
+    snprintf(url, sizeof(url), "%s/api/cloud/settings", g_base_url);
+
+    ResponseBuffer response = {0};
+
+    // Lock mutex for curl operations
+    pthread_mutex_lock(&g_curl_mutex);
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 10L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    pthread_mutex_unlock(&g_curl_mutex);
+
+    if (res != CURLE_OK || http_code != 200) {
+        printf("[backend] get_slicer_presets: request failed (res=%d, http=%ld)\n", res, http_code);
+        if (response.data) free(response.data);
+        return -1;
+    }
+
+    if (!response.data) {
+        printf("[backend] get_slicer_presets: empty response\n");
+        return -1;
+    }
+
+    cJSON *json = cJSON_Parse(response.data);
+    free(response.data);
+
+    if (!json) {
+        printf("[backend] get_slicer_presets: JSON parse failed\n");
+        return -1;
+    }
+
+    int count = 0;
+
+    // Extract filament presets only
+    cJSON *filament = cJSON_GetObjectItem(json, "filament");
+    if (filament && cJSON_IsArray(filament)) {
+        int arr_size = cJSON_GetArraySize(filament);
+        for (int i = 0; i < arr_size && count < max_count; i++) {
+            cJSON *item = cJSON_GetArrayItem(filament, i);
+            if (!item) continue;
+
+            cJSON *setting_id = cJSON_GetObjectItem(item, "setting_id");
+            cJSON *name = cJSON_GetObjectItem(item, "name");
+            cJSON *type = cJSON_GetObjectItem(item, "type");
+            cJSON *is_custom = cJSON_GetObjectItem(item, "is_custom");
+
+            if (setting_id && setting_id->valuestring && name && name->valuestring) {
+                strncpy(presets[count].setting_id, setting_id->valuestring, sizeof(presets[count].setting_id) - 1);
+                strncpy(presets[count].name, name->valuestring, sizeof(presets[count].name) - 1);
+                if (type && type->valuestring) {
+                    strncpy(presets[count].type, type->valuestring, sizeof(presets[count].type) - 1);
+                } else {
+                    strcpy(presets[count].type, "filament");
+                }
+                presets[count].is_custom = is_custom ? cJSON_IsTrue(is_custom) : false;
+                count++;
+            }
+        }
+    }
+
+    cJSON_Delete(json);
+    printf("[backend] get_slicer_presets: found %d presets\n", count);
+    return count;
+}
+
+const char *backend_get_preset_filament_id(const char *setting_id) {
+    printf("[backend] get_preset_filament_id: looking up '%s'\n", setting_id ? setting_id : "(null)");
+    if (!setting_id || !g_curl) {
+        printf("[backend] get_preset_filament_id: invalid params\n");
+        return NULL;
+    }
+
+    // GET /api/cloud/settings/{setting_id}
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/cloud/settings/%s", g_base_url, setting_id);
+    printf("[backend] get_preset_filament_id: GET %s\n", url);
+
+    ResponseBuffer response = {0};
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 10L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    if (res != CURLE_OK || http_code != 200) {
+        printf("[backend] get_preset_filament_id(%s): request failed (res=%d, http=%ld)\n",
+               setting_id, res, http_code);
+        if (response.data) free(response.data);
+        return NULL;
+    }
+
+    if (!response.data) {
+        return NULL;
+    }
+
+    cJSON *json = cJSON_Parse(response.data);
+    free(response.data);
+
+    if (!json) {
+        return NULL;
+    }
+
+    // Try root level filament_id first
+    cJSON *filament_id = cJSON_GetObjectItem(json, "filament_id");
+    if (!filament_id || !filament_id->valuestring) {
+        // Try setting.filament_id
+        cJSON *setting = cJSON_GetObjectItem(json, "setting");
+        if (setting) {
+            filament_id = cJSON_GetObjectItem(setting, "filament_id");
+        }
+    }
+
+    if (filament_id && filament_id->valuestring) {
+        strncpy(g_preset_filament_id, filament_id->valuestring, sizeof(g_preset_filament_id) - 1);
+        g_preset_filament_id[sizeof(g_preset_filament_id) - 1] = '\0';
+        cJSON_Delete(json);
+        printf("[backend] get_preset_filament_id(%s): %s\n", setting_id, g_preset_filament_id);
+        return g_preset_filament_id;
+    }
+
+    printf("[backend] get_preset_filament_id(%s): filament_id not found in response\n", setting_id);
+    cJSON_Delete(json);
+    return NULL;
+}
+
+bool backend_get_preset_detail(const char *setting_id, PresetDetail *detail) {
+    if (!setting_id || !detail || !g_curl) {
+        return false;
+    }
+
+    memset(detail, 0, sizeof(*detail));
+
+    // GET /api/cloud/settings/{setting_id}
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/cloud/settings/%s", g_base_url, setting_id);
+    printf("[backend] get_preset_detail: GET %s\n", url);
+
+    ResponseBuffer response = {0};
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 10L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    if (res != CURLE_OK || http_code != 200) {
+        printf("[backend] get_preset_detail(%s): request failed (res=%d, http=%ld)\n",
+               setting_id, res, http_code);
+        if (response.data) free(response.data);
+        return false;
+    }
+
+    if (!response.data) {
+        return false;
+    }
+
+    cJSON *json = cJSON_Parse(response.data);
+    free(response.data);
+
+    if (!json) {
+        return false;
+    }
+
+    // Try to get filament_id
+    cJSON *filament_id = cJSON_GetObjectItem(json, "filament_id");
+    if (!filament_id || !filament_id->valuestring) {
+        cJSON *setting = cJSON_GetObjectItem(json, "setting");
+        if (setting) {
+            filament_id = cJSON_GetObjectItem(setting, "filament_id");
+        }
+    }
+    if (filament_id && filament_id->valuestring && filament_id->valuestring[0]) {
+        strncpy(detail->filament_id, filament_id->valuestring, sizeof(detail->filament_id) - 1);
+        detail->has_filament_id = true;
+        printf("[backend] get_preset_detail(%s): filament_id=%s\n", setting_id, detail->filament_id);
+    }
+
+    // Try to get base_id
+    cJSON *base_id = cJSON_GetObjectItem(json, "base_id");
+    if (!base_id || !base_id->valuestring) {
+        cJSON *setting = cJSON_GetObjectItem(json, "setting");
+        if (setting) {
+            base_id = cJSON_GetObjectItem(setting, "base_id");
+        }
+    }
+    if (base_id && base_id->valuestring && base_id->valuestring[0]) {
+        strncpy(detail->base_id, base_id->valuestring, sizeof(detail->base_id) - 1);
+        detail->has_base_id = true;
+        printf("[backend] get_preset_detail(%s): base_id=%s\n", setting_id, detail->base_id);
+    }
+
+    cJSON_Delete(json);
+    return detail->has_filament_id || detail->has_base_id;
+}
+
+int backend_get_k_profiles(const char *printer_serial, const char *nozzle_diameter,
+                           KProfileInfo *profiles, int max_count) {
+    if (!printer_serial || !profiles || max_count <= 0 || !g_curl) {
+        printf("[backend] get_k_profiles: invalid params\n");
+        return -1;
+    }
+
+    // GET /api/printers/{serial}/calibrations?nozzle_diameter=0.4
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/printers/%s/calibrations?nozzle_diameter=%s",
+             g_base_url, printer_serial, nozzle_diameter ? nozzle_diameter : "0.4");
+
+    ResponseBuffer response = {0};
+
+    // Lock mutex for curl operations
+    pthread_mutex_lock(&g_curl_mutex);
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 10L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    pthread_mutex_unlock(&g_curl_mutex);
+
+    if (res != CURLE_OK || http_code != 200) {
+        printf("[backend] get_k_profiles(%s): request failed (res=%d, http=%ld)\n",
+               printer_serial, res, http_code);
+        if (response.data) free(response.data);
+        return -1;
+    }
+
+    if (!response.data) {
+        return 0;
+    }
+
+    cJSON *json = cJSON_Parse(response.data);
+    free(response.data);
+
+    if (!json || !cJSON_IsArray(json)) {
+        if (json) cJSON_Delete(json);
+        return 0;
+    }
+
+    int count = 0;
+    int arr_size = cJSON_GetArraySize(json);
+
+    for (int i = 0; i < arr_size && count < max_count; i++) {
+        cJSON *item = cJSON_GetArrayItem(json, i);
+        if (!item) continue;
+
+        cJSON *cali_idx = cJSON_GetObjectItem(item, "cali_idx");
+        cJSON *name = cJSON_GetObjectItem(item, "name");
+        cJSON *k_value = cJSON_GetObjectItem(item, "k_value");
+        cJSON *filament_id = cJSON_GetObjectItem(item, "filament_id");
+        cJSON *setting_id = cJSON_GetObjectItem(item, "setting_id");
+        cJSON *extruder_id = cJSON_GetObjectItem(item, "extruder_id");
+        cJSON *nozzle_temp = cJSON_GetObjectItem(item, "nozzle_temp");
+
+        profiles[count].cali_idx = cali_idx ? cali_idx->valueint : -1;
+        if (name && name->valuestring) {
+            strncpy(profiles[count].name, name->valuestring, sizeof(profiles[count].name) - 1);
+        }
+        if (k_value) {
+            if (cJSON_IsString(k_value)) {
+                strncpy(profiles[count].k_value, k_value->valuestring, sizeof(profiles[count].k_value) - 1);
+            } else {
+                snprintf(profiles[count].k_value, sizeof(profiles[count].k_value), "%.3f", k_value->valuedouble);
+            }
+        }
+        if (filament_id && filament_id->valuestring) {
+            strncpy(profiles[count].filament_id, filament_id->valuestring, sizeof(profiles[count].filament_id) - 1);
+        }
+        if (setting_id && setting_id->valuestring) {
+            strncpy(profiles[count].setting_id, setting_id->valuestring, sizeof(profiles[count].setting_id) - 1);
+        }
+        // Handle null extruder_id (single-nozzle printers) - default to -1
+        profiles[count].extruder_id = (extruder_id && !cJSON_IsNull(extruder_id)) ? extruder_id->valueint : -1;
+        profiles[count].nozzle_temp = (nozzle_temp && !cJSON_IsNull(nozzle_temp)) ? nozzle_temp->valueint : 230;
+        count++;
+    }
+
+    cJSON_Delete(json);
+    printf("[backend] get_k_profiles(%s): found %d profiles\n", printer_serial, count);
+    return count;
+}
+
+bool backend_set_slot_filament(const char *printer_serial, int ams_id, int tray_id,
+                                const char *tray_info_idx, const char *setting_id,
+                                const char *tray_type, const char *tray_sub_brands,
+                                const char *tray_color, int nozzle_temp_min, int nozzle_temp_max) {
+    if (!printer_serial || !g_curl) {
+        printf("[backend] set_slot_filament: invalid params\n");
+        return false;
+    }
+
+    // POST /api/printers/{serial}/ams/{ams_id}/tray/{tray_id}/filament
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/printers/%s/ams/%d/tray/%d/filament",
+             g_base_url, printer_serial, ams_id, tray_id);
+
+    // Build JSON payload
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "tray_info_idx", tray_info_idx ? tray_info_idx : "");
+    cJSON_AddStringToObject(json, "setting_id", setting_id ? setting_id : "");
+    cJSON_AddStringToObject(json, "tray_type", tray_type ? tray_type : "");
+    cJSON_AddStringToObject(json, "tray_sub_brands", tray_sub_brands ? tray_sub_brands : "");
+    cJSON_AddStringToObject(json, "tray_color", tray_color ? tray_color : "FFFFFFFF");
+    cJSON_AddNumberToObject(json, "nozzle_temp_min", nozzle_temp_min);
+    cJSON_AddNumberToObject(json, "nozzle_temp_max", nozzle_temp_max);
+
+    char *json_str = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+
+    if (!json_str) {
+        return false;
+    }
+
+    printf("[backend] set_slot_filament: POST %s\n", url);
+    printf("[backend] payload: %s\n", json_str);
+
+    ResponseBuffer response = {0};
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, json_str);
+    curl_easy_setopt(g_curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 10L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    curl_slist_free_all(headers);
+    free(json_str);
+    if (response.data) free(response.data);
+
+    bool success = (res == CURLE_OK && (http_code == 200 || http_code == 204));
+    printf("[backend] set_slot_filament: result=%d, http=%ld, success=%d\n",
+           res, http_code, success);
+
+    return success;
+}
+
+bool backend_set_slot_calibration(const char *printer_serial, int ams_id, int tray_id,
+                                   int cali_idx, const char *filament_id, const char *setting_id,
+                                   const char *nozzle_diameter, float k_value, int nozzle_temp) {
+    if (!printer_serial || !g_curl) {
+        printf("[backend] set_slot_calibration: invalid params\n");
+        return false;
+    }
+
+    // POST /api/printers/{serial}/ams/{ams_id}/tray/{tray_id}/calibration
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/printers/%s/ams/%d/tray/%d/calibration",
+             g_base_url, printer_serial, ams_id, tray_id);
+
+    // Build JSON payload
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "cali_idx", cali_idx);
+    cJSON_AddStringToObject(json, "filament_id", filament_id ? filament_id : "");
+    cJSON_AddStringToObject(json, "setting_id", setting_id ? setting_id : "");
+    cJSON_AddStringToObject(json, "nozzle_diameter", nozzle_diameter ? nozzle_diameter : "0.4");
+    cJSON_AddNumberToObject(json, "k_value", k_value);
+    cJSON_AddNumberToObject(json, "nozzle_temp_max", nozzle_temp);
+
+    char *json_str = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+
+    if (!json_str) {
+        return false;
+    }
+
+    printf("[backend] set_slot_calibration: POST %s\n", url);
+    printf("[backend] payload: %s\n", json_str);
+
+    ResponseBuffer response = {0};
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, json_str);
+    curl_easy_setopt(g_curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 10L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    curl_slist_free_all(headers);
+    free(json_str);
+    if (response.data) free(response.data);
+
+    bool success = (res == CURLE_OK && (http_code == 200 || http_code == 204));
+    printf("[backend] set_slot_calibration: result=%d, http=%ld, success=%d\n",
+           res, http_code, success);
+
+    return success;
+}
+
+bool backend_reset_slot(const char *printer_serial, int ams_id, int tray_id) {
+    if (!printer_serial || !g_curl) {
+        printf("[backend] reset_slot: invalid params\n");
+        return false;
+    }
+
+    // POST /api/printers/{serial}/ams/{ams_id}/tray/{tray_id}/reset
+    char url[512];
+    snprintf(url, sizeof(url), "%s/api/printers/%s/ams/%d/tray/%d/reset",
+             g_base_url, printer_serial, ams_id, tray_id);
+
+    printf("[backend] reset_slot: POST %s\n", url);
+
+    ResponseBuffer response = {0};
+
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, "");
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 10L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    if (response.data) free(response.data);
+
+    bool success = (res == CURLE_OK && (http_code == 200 || http_code == 204));
+    printf("[backend] reset_slot: result=%d, http=%ld, success=%d\n",
+           res, http_code, success);
+
+    return success;
+}
+
+// =============================================================================
 // NFC Hardware Simulation (keyboard toggle in simulator)
 // =============================================================================
 
@@ -2465,4 +2954,94 @@ int backend_scale_calibrate(float known_weight_grams) {
     }
     printf("[backend] Scale calibrate command failed: %s\n", curl_easy_strerror(res));
     return -1;
+}
+
+// =============================================================================
+// Color Catalog API
+// =============================================================================
+
+int backend_search_colors(const char *manufacturer, const char *material,
+                          ColorCatalogEntry *colors, int max_count) {
+    if (!g_curl || !colors || max_count <= 0) return -1;
+
+    // Build URL with query params
+    char url[512];
+    char params[256] = "";
+    int has_params = 0;
+
+    if (manufacturer && manufacturer[0]) {
+        char *encoded = curl_easy_escape(g_curl, manufacturer, 0);
+        if (encoded) {
+            snprintf(params + strlen(params), sizeof(params) - strlen(params),
+                     "%smanufacturer=%s", has_params ? "&" : "?", encoded);
+            curl_free(encoded);
+            has_params = 1;
+        }
+    }
+
+    if (material && material[0]) {
+        char *encoded = curl_easy_escape(g_curl, material, 0);
+        if (encoded) {
+            snprintf(params + strlen(params), sizeof(params) - strlen(params),
+                     "%smaterial=%s", has_params ? "&" : "?", encoded);
+            curl_free(encoded);
+            has_params = 1;
+        }
+    }
+
+    snprintf(url, sizeof(url), "%s/api/colors/search%s", g_base_url, params);
+
+    // Make request
+    ResponseBuffer response = {0};
+    curl_easy_reset(g_curl);
+    curl_easy_setopt(g_curl, CURLOPT_URL, url);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 10L);
+
+    CURLcode res = curl_easy_perform(g_curl);
+    if (res != CURLE_OK) {
+        printf("[backend] Color search failed: %s\n", curl_easy_strerror(res));
+        free(response.data);
+        return -1;
+    }
+
+    if (!response.data) return 0;
+
+    // Parse JSON array
+    cJSON *json = cJSON_Parse(response.data);
+    free(response.data);
+
+    if (!json || !cJSON_IsArray(json)) {
+        cJSON_Delete(json);
+        return -1;
+    }
+
+    int count = 0;
+    cJSON *item;
+    cJSON_ArrayForEach(item, json) {
+        if (count >= max_count) break;
+
+        ColorCatalogEntry *entry = &colors[count];
+        memset(entry, 0, sizeof(ColorCatalogEntry));
+
+        cJSON *id = cJSON_GetObjectItem(item, "id");
+        cJSON *mfr = cJSON_GetObjectItem(item, "manufacturer");
+        cJSON *name = cJSON_GetObjectItem(item, "color_name");
+        cJSON *hex = cJSON_GetObjectItem(item, "hex_color");
+        cJSON *mat = cJSON_GetObjectItem(item, "material");
+
+        if (cJSON_IsNumber(id)) entry->id = id->valueint;
+        if (cJSON_IsString(mfr)) strncpy(entry->manufacturer, mfr->valuestring, sizeof(entry->manufacturer) - 1);
+        if (cJSON_IsString(name)) strncpy(entry->color_name, name->valuestring, sizeof(entry->color_name) - 1);
+        if (cJSON_IsString(hex)) strncpy(entry->hex_color, hex->valuestring, sizeof(entry->hex_color) - 1);
+        if (cJSON_IsString(mat)) strncpy(entry->material, mat->valuestring, sizeof(entry->material) - 1);
+
+        count++;
+    }
+
+    cJSON_Delete(json);
+    printf("[backend] Found %d colors for manufacturer='%s' material='%s'\n",
+           count, manufacturer ? manufacturer : "", material ? material : "");
+    return count;
 }

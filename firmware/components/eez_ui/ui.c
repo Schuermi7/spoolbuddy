@@ -227,6 +227,11 @@ void wire_ams_overview_buttons(void) {
 
     // Wire printer selection dropdown
     wire_ams_printer_dropdown();
+
+    // Wire AMS slot click handlers (opens Configure Slot modal)
+#ifndef ESP_PLATFORM
+    wire_ams_slot_click_handlers();
+#endif
 }
 
 void wire_scan_result_buttons(void) {
@@ -415,10 +420,10 @@ void ui_tick() {
         update_backend_ui();
     }
 
-    // Poll WiFi status (every ~50 ticks = 250ms)
+    // Poll backend/UI status (every ~20 ticks = 100ms for faster updates)
     static int wifi_poll_counter = 0;
     wifi_poll_counter++;
-    if (wifi_poll_counter >= 50) {
+    if (wifi_poll_counter >= 20) {
         wifi_poll_counter = 0;
 
         // Update WiFi settings screen if active
