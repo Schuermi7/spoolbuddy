@@ -128,6 +128,20 @@ CREATE TABLE IF NOT EXISTS ams_sensor_history (
     recorded_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
+-- API keys table
+CREATE TABLE IF NOT EXISTS api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL,
+    key_prefix TEXT NOT NULL,
+    can_read INTEGER DEFAULT 1,
+    can_write INTEGER DEFAULT 0,
+    can_control INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    last_used INTEGER,
+    created_at INTEGER DEFAULT (strftime('%s', 'now'))
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_spools_tag_id ON spools(tag_id);
 CREATE INDEX IF NOT EXISTS idx_spools_material ON spools(material);

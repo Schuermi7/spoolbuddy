@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from "preact/hooks";
 import * as preact from "preact";
 import { useWebSocket } from "../lib/websocket";
-import { api, CloudAuthStatus, VersionInfo, UpdateCheck, UpdateStatus, FirmwareCheck, AMSThresholds, DebugLoggingState, LogEntry, SystemInfo } from "../lib/api";
-import { Cloud, CloudOff, LogOut, Loader2, Mail, Lock, Key, Download, RefreshCw, CheckCircle, AlertCircle, GitBranch, ExternalLink, Wifi, WifiOff, Cpu, Usb, RotateCcw, Upload, HardDrive, Palette, Sun, Moon, LayoutDashboard, Settings2, Package, Monitor, Scale, X, ChevronRight, Droplets, Thermometer, LifeBuoy, Bug, Trash2, FileText, Server, Database, Activity, HelpCircle, Play, Square } from "lucide-preact";
+import { api, CloudAuthStatus, VersionInfo, UpdateCheck, UpdateStatus, FirmwareCheck, AMSThresholds, DebugLoggingState, LogEntry, SystemInfo, APIKey, APIKeyCreate } from "../lib/api";
+import { Cloud, CloudOff, LogOut, Loader2, Mail, Lock, Key, Download, RefreshCw, CheckCircle, AlertCircle, GitBranch, ExternalLink, Wifi, WifiOff, Cpu, Usb, RotateCcw, Upload, HardDrive, Palette, Sun, Moon, LayoutDashboard, Settings2, Package, Monitor, Scale, X, ChevronRight, Droplets, Thermometer, LifeBuoy, Bug, Trash2, FileText, Server, Database, Activity, HelpCircle, Play, Square, Copy, Globe, Plus } from "lucide-preact";
 import { useToast } from "../lib/toast";
 import { SerialTerminal } from "../components/SerialTerminal";
 import { SpoolCatalogSettings } from "../components/SpoolCatalogSettings";
 import { ColorCatalogSettings } from "../components/ColorCatalogSettings";
+import { APIBrowser } from "../components/APIBrowser";
 import { useTheme, type ThemeStyle, type DarkBackground, type LightBackground, type ThemeAccent } from "../lib/theme";
 
 // Storage keys for dashboard settings
@@ -294,7 +295,7 @@ function AMSSettings() {
   );
 }
 
-type SettingsTab = 'general' | 'filament' | 'system' | 'support';
+type SettingsTab = 'general' | 'filament' | 'system' | 'api' | 'support';
 
 // Reusable section card component for consistent styling
 function SettingsCard({
@@ -424,6 +425,17 @@ export function Settings() {
   const [logsFiltered, setLogsFiltered] = useState(0);
   const [downloadingBundle, setDownloadingBundle] = useState(false);
   const [logStreaming, setLogStreaming] = useState(false);
+
+  // API Keys tab state
+  const [apiKeys, setApiKeys] = useState<APIKey[]>([]);
+  const [loadingApiKeys, setLoadingApiKeys] = useState(false);
+  const [showCreateApiKey, setShowCreateApiKey] = useState(false);
+  const [creatingApiKey, setCreatingApiKey] = useState(false);
+  const [createdApiKey, setCreatedApiKey] = useState<string | null>(null);
+  const [newApiKeyName, setNewApiKeyName] = useState('');
+  const [newApiKeyPermissions, setNewApiKeyPermissions] = useState({ can_read: true, can_write: false, can_control: false });
+  const [testApiKey, setTestApiKey] = useState('');
+  const [deleteKeyId, setDeleteKeyId] = useState<number | null>(null);
 
   // Handle hash navigation and switch to correct tab
   useEffect(() => {
@@ -758,6 +770,87 @@ export function Settings() {
     setCalibrationWeight(500);
   };
 
+  // Load API keys when tab becomes active
+  useEffect(() => {
+    if (activeTab !== 'api') return;
+
+    const loadApiKeys = async () => {
+      setLoadingApiKeys(true);
+      try {
+        const keys = await api.getAPIKeys();
+        setApiKeys(keys);
+      } catch (e) {
+        console.error('Failed to load API keys:', e);
+        showToast('error', 'Failed to load API keys');
+      } finally {
+        setLoadingApiKeys(false);
+      }
+    };
+
+    loadApiKeys();
+  }, [activeTab, showToast]);
+
+  const handleCreateApiKey = async () => {
+    if (!newApiKeyName.trim()) {
+      showToast('error', 'Key name is required');
+      return;
+    }
+
+    setCreatingApiKey(true);
+    try {
+      const data: APIKeyCreate = {
+        name: newApiKeyName.trim(),
+        ...newApiKeyPermissions,
+      };
+      const result = await api.createAPIKey(data);
+      setCreatedApiKey(result.key);
+      setApiKeys(prev => [result, ...prev]);
+      setShowCreateApiKey(false);
+      setNewApiKeyName('');
+      setNewApiKeyPermissions({ can_read: true, can_write: false, can_control: false });
+    } catch (e) {
+      showToast('error', e instanceof Error ? e.message : 'Failed to create API key');
+    } finally {
+      setCreatingApiKey(false);
+    }
+  };
+
+  const handleDeleteApiKey = async (keyId: number) => {
+    try {
+      await api.deleteAPIKey(keyId);
+      setApiKeys(prev => prev.filter(k => k.id !== keyId));
+      setDeleteKeyId(null);
+      showToast('success', 'API key deleted');
+    } catch (e) {
+      showToast('error', e instanceof Error ? e.message : 'Failed to delete API key');
+    }
+  };
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      showToast('success', 'Copied to clipboard');
+    } catch {
+      showToast('error', 'Failed to copy');
+    }
+  };
+
+  const formatTimestamp = (ts: number | null) => {
+    if (!ts) return 'Never';
+    return new Date(ts * 1000).toLocaleDateString();
+  };
+
   // Load support data when tab becomes active
   useEffect(() => {
     if (activeTab !== 'support') return;
@@ -961,6 +1054,7 @@ export function Settings() {
     { id: 'general', label: 'General', icon: Settings2 },
     { id: 'filament', label: 'Filament', icon: Package },
     { id: 'system', label: 'System', icon: Monitor },
+    { id: 'api', label: 'API', icon: Globe },
     { id: 'support', label: 'Support', icon: LifeBuoy },
   ];
 
@@ -1339,6 +1433,296 @@ export function Settings() {
             {/* Full width - Color Catalog */}
             <div id="colors" class="scroll-mt-20">
               <ColorCatalogSettings />
+            </div>
+          </div>
+        )}
+
+        {/* ============ API TAB ============ */}
+        {activeTab === 'api' && (
+          <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
+            {/* Left Column - API Keys Management */}
+            <div class="space-y-6">
+              <div class="flex items-start justify-between gap-4">
+                <div class="flex-1">
+                  <h2 class="text-lg font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                    <Key class="w-5 h-5 text-[var(--accent)]" />
+                    API Keys
+                  </h2>
+                  <p class="text-sm text-[var(--text-muted)] mt-1">
+                    Create API keys for external integrations and webhooks.
+                  </p>
+                </div>
+                <button onClick={() => setShowCreateApiKey(true)} class="btn btn-primary flex items-center gap-2">
+                  <Plus class="w-4 h-4" />
+                  Create Key
+                </button>
+              </div>
+
+              {/* Created Key Display */}
+              {createdApiKey && (
+                <div class="card border-[var(--accent)]">
+                  <div class="p-4">
+                    <div class="flex items-start gap-3">
+                      <CheckCircle class="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                      <div class="flex-1 min-w-0">
+                        <p class="text-[var(--text-primary)] font-medium mb-1">API Key Created Successfully</p>
+                        <p class="text-sm text-[var(--text-muted)] mb-2">
+                          Copy this key now - it won't be shown again!
+                        </p>
+                        <div class="flex items-center gap-2 bg-[var(--bg-secondary)] rounded-lg p-2">
+                          <code class="flex-1 text-sm text-[var(--accent)] font-mono break-all">
+                            {createdApiKey}
+                          </code>
+                          <button
+                            class="btn btn-ghost p-1.5"
+                            onClick={() => copyToClipboard(createdApiKey)}
+                          >
+                            <Copy class="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div class="flex gap-2 mt-3">
+                          <button
+                            class="btn btn-ghost text-sm"
+                            onClick={() => {
+                              setTestApiKey(createdApiKey);
+                              showToast('success', 'Key added to API Browser');
+                            }}
+                          >
+                            Use in API Browser
+                          </button>
+                          <button
+                            class="btn btn-ghost text-sm"
+                            onClick={() => setCreatedApiKey(null)}
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Create Key Form */}
+              {showCreateApiKey && (
+                <div class="card">
+                  <div class="px-5 py-4 bg-[var(--bg-tertiary)]/50 border-b border-[var(--border-color)]">
+                    <h3 class="text-base font-semibold text-[var(--text-primary)]">Create New API Key</h3>
+                  </div>
+                  <div class="p-5 space-y-4">
+                    <div>
+                      <label class="block text-sm text-[var(--text-muted)] mb-1">Key Name</label>
+                      <input
+                        type="text"
+                        value={newApiKeyName}
+                        onInput={(e) => setNewApiKeyName((e.target as HTMLInputElement).value)}
+                        placeholder="e.g., Home Assistant, OctoPrint"
+                        class="input w-full"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-sm text-[var(--text-muted)] mb-2">Permissions</label>
+                      <div class="space-y-2">
+                        <label class="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={newApiKeyPermissions.can_read}
+                            onChange={(e) => setNewApiKeyPermissions(prev => ({ ...prev, can_read: (e.target as HTMLInputElement).checked }))}
+                            class="w-4 h-4 rounded border-[var(--border-color)] text-[var(--accent)] focus:ring-[var(--accent)]"
+                          />
+                          <div>
+                            <span class="text-[var(--text-primary)]">Read</span>
+                            <p class="text-xs text-[var(--text-muted)]">View spools, printers, and status</p>
+                          </div>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={newApiKeyPermissions.can_write}
+                            onChange={(e) => setNewApiKeyPermissions(prev => ({ ...prev, can_write: (e.target as HTMLInputElement).checked }))}
+                            class="w-4 h-4 rounded border-[var(--border-color)] text-[var(--accent)] focus:ring-[var(--accent)]"
+                          />
+                          <div>
+                            <span class="text-[var(--text-primary)]">Write</span>
+                            <p class="text-xs text-[var(--text-muted)]">Create and modify spools and settings</p>
+                          </div>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={newApiKeyPermissions.can_control}
+                            onChange={(e) => setNewApiKeyPermissions(prev => ({ ...prev, can_control: (e.target as HTMLInputElement).checked }))}
+                            class="w-4 h-4 rounded border-[var(--border-color)] text-[var(--accent)] focus:ring-[var(--accent)]"
+                          />
+                          <div>
+                            <span class="text-[var(--text-primary)]">Control</span>
+                            <p class="text-xs text-[var(--text-muted)]">Control printers and AMS slots</p>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-2 pt-2">
+                      <button
+                        onClick={handleCreateApiKey}
+                        disabled={creatingApiKey}
+                        class="btn btn-primary flex items-center gap-2"
+                      >
+                        {creatingApiKey ? (
+                          <Loader2 class="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus class="w-4 h-4" />
+                        )}
+                        Create Key
+                      </button>
+                      <button class="btn btn-ghost" onClick={() => setShowCreateApiKey(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Existing Keys List */}
+              {loadingApiKeys ? (
+                <div class="flex justify-center py-12">
+                  <Loader2 class="w-8 h-8 text-[var(--accent)] animate-spin" />
+                </div>
+              ) : apiKeys.length > 0 ? (
+                <div class="space-y-3">
+                  {apiKeys.map((key) => (
+                    <div key={key.id} class="card">
+                      <div class="p-4">
+                        <div class="flex items-center justify-between">
+                          <div class="flex items-center gap-3">
+                            <Key class={`w-5 h-5 ${key.enabled ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`} />
+                            <div>
+                              <p class="text-[var(--text-primary)] font-medium">{key.name}</p>
+                              <p class="text-xs text-[var(--text-muted)]">
+                                {key.key_prefix}........
+                                {key.last_used && ` · Last used: ${formatTimestamp(key.last_used)}`}
+                              </p>
+                            </div>
+                          </div>
+                          <div class="flex items-center gap-2">
+                            <div class="flex gap-1 text-xs">
+                              {key.can_read && (
+                                <span class="px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">Read</span>
+                              )}
+                              {key.can_write && (
+                                <span class="px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded">Write</span>
+                              )}
+                              {key.can_control && (
+                                <span class="px-1.5 py-0.5 bg-orange-500/20 text-orange-400 rounded">Control</span>
+                              )}
+                            </div>
+                            <button
+                              class="btn btn-ghost p-1.5"
+                              onClick={() => setDeleteKeyId(key.id)}
+                            >
+                              <Trash2 class="w-4 h-4 text-red-400" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div class="card">
+                  <div class="p-12 text-center">
+                    <Key class="w-16 h-16 mx-auto mb-4 text-[var(--text-muted)] opacity-30" />
+                    <p class="text-lg font-medium text-[var(--text-primary)] mb-2">No API keys</p>
+                    <p class="text-sm text-[var(--text-muted)] mb-4">Create an API key to integrate with external services.</p>
+                    <button onClick={() => setShowCreateApiKey(true)} class="btn btn-primary flex items-center gap-2 mx-auto">
+                      <Plus class="w-4 h-4" />
+                      Create Your First Key
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* API Usage Documentation */}
+              <div class="card">
+                <div class="px-5 py-4 bg-[var(--bg-tertiary)]/50 border-b border-[var(--border-color)]">
+                  <h3 class="text-base font-semibold text-[var(--text-primary)]">Using API Keys</h3>
+                </div>
+                <div class="p-5 space-y-3 text-sm">
+                  <p class="text-[var(--text-muted)]">
+                    Use your API key in the <code class="text-[var(--accent)] bg-[var(--bg-tertiary)] px-1 rounded">X-API-Key</code> header or as <code class="text-[var(--accent)] bg-[var(--bg-tertiary)] px-1 rounded">Authorization: Bearer &lt;key&gt;</code>.
+                  </p>
+                  <div class="space-y-2 font-mono text-xs">
+                    <div class="p-2 bg-[var(--bg-secondary)] rounded">
+                      <span class="text-blue-400">GET</span>{' '}
+                      <span class="text-[var(--text-primary)]">/api/spools</span>
+                      <span class="text-[var(--text-muted)]"> - List all spools</span>
+                    </div>
+                    <div class="p-2 bg-[var(--bg-secondary)] rounded">
+                      <span class="text-blue-400">GET</span>{' '}
+                      <span class="text-[var(--text-primary)]">/api/printers</span>
+                      <span class="text-[var(--text-muted)]"> - List all printers</span>
+                    </div>
+                    <div class="p-2 bg-[var(--bg-secondary)] rounded">
+                      <span class="text-green-400">POST</span>{' '}
+                      <span class="text-[var(--text-primary)]">/api/spools</span>
+                      <span class="text-[var(--text-muted)]"> - Create a spool</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column - API Browser */}
+            <div class="space-y-6">
+              <div>
+                <h2 class="text-lg font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                  <Globe class="w-5 h-5 text-[var(--accent)]" />
+                  API Browser
+                </h2>
+                <p class="text-sm text-[var(--text-muted)] mt-1">
+                  Explore and test all available API endpoints.
+                </p>
+              </div>
+
+              {/* API Key Input for Testing */}
+              <div class="card">
+                <div class="p-4">
+                  <label class="block text-sm text-[var(--text-muted)] mb-2">API Key for Testing</label>
+                  <input
+                    type="text"
+                    value={testApiKey}
+                    onInput={(e) => setTestApiKey((e.target as HTMLInputElement).value)}
+                    placeholder="Paste your API key here to test authenticated endpoints..."
+                    class="input w-full font-mono text-sm"
+                  />
+                  <p class="text-xs text-[var(--text-muted)] mt-2">
+                    This key will be sent as <code class="text-[var(--accent)]">X-API-Key</code> header with requests.
+                  </p>
+                </div>
+              </div>
+
+              <APIBrowser apiKey={testApiKey} />
+            </div>
+          </div>
+        )}
+
+        {/* Delete API Key Confirmation Modal */}
+        {deleteKeyId !== null && (
+          <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div class="card max-w-md w-full">
+              <div class="p-5">
+                <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-2">Delete API Key</h3>
+                <p class="text-sm text-[var(--text-muted)] mb-4">
+                  Are you sure you want to delete this API key? Any integrations using this key will stop working.
+                </p>
+                <div class="flex justify-end gap-2">
+                  <button class="btn btn-ghost" onClick={() => setDeleteKeyId(null)}>
+                    Cancel
+                  </button>
+                  <button class="btn bg-red-500 hover:bg-red-600 text-white" onClick={() => handleDeleteApiKey(deleteKeyId)}>
+                    Delete Key
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

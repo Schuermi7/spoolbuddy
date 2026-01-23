@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from api import (
+    api_keys_router,
     catalog_router,
     colors_router,
     device_router,
@@ -716,6 +717,9 @@ app = FastAPI(
     description="Filament management for Bambu Lab printers",
     version="0.1.0",
     lifespan=lifespan,
+    openapi_url="/api/openapi.json",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
 )
 
 # CORS middleware
@@ -741,6 +745,7 @@ app.include_router(catalog_router, prefix="/api")
 app.include_router(colors_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(support_router, prefix="/api")
+app.include_router(api_keys_router, prefix="/api")
 
 
 @app.get("/api/time")

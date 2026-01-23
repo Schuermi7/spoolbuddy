@@ -320,6 +320,38 @@ export interface AMSThresholds {
   history_retention_days: number;
 }
 
+// API Key types
+export interface APIKey {
+  id: number;
+  name: string;
+  key_prefix: string;
+  can_read: boolean;
+  can_write: boolean;
+  can_control: boolean;
+  enabled: boolean;
+  last_used: number | null;
+  created_at: number;
+}
+
+export interface APIKeyCreate {
+  name: string;
+  can_read?: boolean;
+  can_write?: boolean;
+  can_control?: boolean;
+}
+
+export interface APIKeyCreateResponse extends APIKey {
+  key: string;  // Full key, only shown on creation
+}
+
+export interface APIKeyUpdate {
+  name?: string;
+  can_read?: boolean;
+  can_write?: boolean;
+  can_control?: boolean;
+  enabled?: boolean;
+}
+
 // Support API types
 export interface DebugLoggingState {
   enabled: boolean;
@@ -919,6 +951,31 @@ class ApiClient {
       throw new Error(error || `HTTP ${response.status}`);
     }
     return response.blob();
+  }
+
+  // API Keys API
+  async getAPIKeys(): Promise<APIKey[]> {
+    return this.request<APIKey[]>("/api-keys/");
+  }
+
+  async createAPIKey(data: APIKeyCreate): Promise<APIKeyCreateResponse> {
+    return this.request<APIKeyCreateResponse>("/api-keys/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateAPIKey(id: number, data: APIKeyUpdate): Promise<APIKey> {
+    return this.request<APIKey>(`/api-keys/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteAPIKey(id: number): Promise<{ message: string }> {
+    return this.request<{ message: string }>(`/api-keys/${id}`, {
+      method: "DELETE",
+    });
   }
 }
 

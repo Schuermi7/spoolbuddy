@@ -1,3 +1,4 @@
+from .api_keys import router as api_keys_router
 from .catalog import router as catalog_router
 from .colors import router as colors_router
 from .device import router as device_router
@@ -22,4 +23,5 @@ __all__ = [
     "catalog_router",
     "colors_router",
     "support_router",
+    "api_keys_router",
 ]
