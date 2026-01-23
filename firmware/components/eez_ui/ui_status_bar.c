@@ -137,15 +137,35 @@ static bool get_active_tray_info(uint32_t *color_out, char *material_out, size_t
         return false;
     }
 
-    // Determine which tray is active
+    // Determine which tray is active - matching frontend getActiveTrayInUnit logic
     int active_tray = -1;
-    if (printer->tray_now >= 0 && printer->tray_now < 255) {
-        active_tray = printer->tray_now;
-    } else if (printer->tray_now_right >= 0 && printer->tray_now_right < 255) {
-        active_tray = printer->tray_now_right;
-    } else if (printer->tray_now_left >= 0 && printer->tray_now_left < 255) {
-        active_tray = printer->tray_now_left;
+    int active_extruder = printer->active_extruder;
+
+    // Check if this is dual-nozzle mode (per-extruder tray values available)
+    bool is_dual_nozzle = (printer->tray_now_left >= 0 || printer->tray_now_right >= 0);
+
+    if (is_dual_nozzle) {
+        // Dual-nozzle: must have valid active_extruder to show any tray as active
+        // (matches frontend: if activeExtruder === null || activeExtruder === -1, return null)
+        if (active_extruder < 0) {
+            STATUS_LOG("Dual-nozzle but no active extruder (%d), no active tray", active_extruder);
+            return false;
+        }
+        // Use the loaded tray for the active extruder
+        if (active_extruder == 0 && printer->tray_now_right >= 0 && printer->tray_now_right < 254) {
+            active_tray = printer->tray_now_right;
+        } else if (active_extruder == 1 && printer->tray_now_left >= 0 && printer->tray_now_left < 254) {
+            active_tray = printer->tray_now_left;
+        }
+    } else {
+        // Single-nozzle: use legacy tray_now
+        if (printer->tray_now >= 0 && printer->tray_now < 255) {
+            active_tray = printer->tray_now;
+        }
     }
+
+    STATUS_LOG("Active tray calc: tray_now=%d, left=%d, right=%d, active_ext=%d -> active=%d",
+               printer->tray_now, printer->tray_now_left, printer->tray_now_right, active_extruder, active_tray);
 
     if (active_tray < 0) {
         return false;

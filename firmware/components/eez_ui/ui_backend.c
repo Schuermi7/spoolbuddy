@@ -989,6 +989,9 @@ static void update_ams_display(void) {
     int tray_now_right = backend_get_tray_now_right(selected_printer_index);
     int active_extruder = backend_get_active_extruder(selected_printer_index);  // -1=unknown, 0=right, 1=left
 
+    ESP_LOGI(TAG, "AMS display: tray_now=%d, left=%d, right=%d, active_ext=%d",
+             tray_now, tray_now_left, tray_now_right, active_extruder);
+
     // Determine which tray is ACTIVELY printing (not just loaded)
     // For dual-nozzle printers: active_extruder indicates which nozzle (0=right, 1=left)
     // For single-nozzle printers: active_extruder is -1, use tray_now for right side
@@ -1051,18 +1054,24 @@ static void update_ams_display(void) {
 
     if (is_dual_nozzle) {
         // Dual nozzle: only use per-extruder tray values, no fallback to legacy tray_now
-        // tray_now_left/right must be explicitly set (>= 0) to show active indicator
-        if (active_extruder == 0 && tray_now_right >= 0) {
+        // tray_now_left/right must be valid AMS tray index (0-63 for regular, 64-71 for HT)
+        // Values >= 254 are external spool markers, not valid for highlighting
+        if (active_extruder == 0 && tray_now_right >= 0 && tray_now_right < 254) {
             active_tray_right = tray_now_right;
-        } else if (active_extruder == 1 && tray_now_left >= 0) {
+        } else if (active_extruder == 1 && tray_now_left >= 0 && tray_now_left < 254) {
             active_tray_left = tray_now_left;
         }
-        // If per-extruder values not set, don't show any slot as active
+        // If per-extruder values not set or invalid, don't show any slot as active
     } else {
-        // Single nozzle: use tray_now for right side (only side shown)
-        active_tray_right = tray_now;
+        // Single nozzle: all AMS displays on LEFT side, so set active_tray_left
+        // 255 = no tray loaded, all other values (including 254 for external) are valid
+        if (tray_now >= 0 && tray_now != 255) {
+            active_tray_left = tray_now;
+        }
     }
 
+    ESP_LOGI(TAG, "AMS active trays: dual=%d, active_left=%d, active_right=%d",
+             is_dual_nozzle, active_tray_left, active_tray_right);
 
     // Separate AMS units by type and nozzle
     // Left nozzle: top row for 4-slot, bottom row for 1-slot
@@ -1142,9 +1151,9 @@ static void update_ams_display(void) {
         };
 
         if (!is_dual_nozzle) {
-            // Single-nozzle: create one "Ext" slot on LEFT side
+            // Single-nozzle: create one "Ext" slot on LEFT side, use active_tray_left
             if (objects.main_screen_ams_left_nozzle && ams_widget_count_left < MAX_AMS_WIDGETS) {
-                lv_obj_t *ext = create_ams_container(objects.main_screen_ams_left_nozzle, &ext_info, active_tray_right);
+                lv_obj_t *ext = create_ams_container(objects.main_screen_ams_left_nozzle, &ext_info, active_tray_left);
                 lv_obj_set_pos(ext, left_1slot_x, ROW_BOTTOM_Y);
                 ams_widgets_left[ams_widget_count_left++] = ext;
             }
@@ -1271,20 +1280,20 @@ static void update_extruder_indicator(lv_obj_t *indicator, int8_t extruder) {
     if (!indicator) return;
 
     if (extruder == 1) {
-        // Left extruder - green badge with "L" (matching main screen)
+        // Left extruder - blue badge with "L" (matching frontend: bg-blue-600)
         lv_label_set_text(indicator, "L");
-        lv_obj_set_style_bg_color(indicator, lv_color_hex(ACCENT_GREEN), 0);
+        lv_obj_set_style_bg_color(indicator, lv_color_hex(0x2563eb), 0);  // blue-600
         lv_obj_set_style_bg_opa(indicator, 255, 0);
-        lv_obj_set_style_text_color(indicator, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(indicator, lv_color_hex(0xFFFFFF), 0);  // white text
         lv_obj_set_style_text_font(indicator, &lv_font_montserrat_10, 0);
         lv_obj_set_style_text_align(indicator, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_clear_flag(indicator, LV_OBJ_FLAG_HIDDEN);
     } else if (extruder == 0) {
-        // Right extruder - green badge with "R" (matching main screen)
+        // Right extruder - purple badge with "R" (matching frontend: bg-purple-600)
         lv_label_set_text(indicator, "R");
-        lv_obj_set_style_bg_color(indicator, lv_color_hex(ACCENT_GREEN), 0);
+        lv_obj_set_style_bg_color(indicator, lv_color_hex(0x9333ea), 0);  // purple-600
         lv_obj_set_style_bg_opa(indicator, 255, 0);
-        lv_obj_set_style_text_color(indicator, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(indicator, lv_color_hex(0xFFFFFF), 0);  // white text
         lv_obj_set_style_text_font(indicator, &lv_font_montserrat_10, 0);
         lv_obj_set_style_text_align(indicator, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_clear_flag(indicator, LV_OBJ_FLAG_HIDDEN);
@@ -1344,6 +1353,46 @@ static void format_fill_level(char *buf, size_t buf_size, uint8_t remain) {
 static lv_obj_t *last_ams_screen = NULL;
 static bool ams_row2_positioned = false;
 
+/**
+ * Check if a slot should be highlighted as active (dual-nozzle aware)
+ *
+ * For dual-nozzle: slot is active only if:
+ *   - unit's extruder matches active_extruder AND
+ *   - global_tray matches the corresponding tray_now_left/right
+ * For single-nozzle: slot is active if global_tray matches tray_now
+ */
+static bool is_slot_active_dual_aware(int global_tray, int unit_extruder,
+                                      int tray_now, int tray_now_left, int tray_now_right,
+                                      int active_extruder) {
+    // If we have per-extruder tray assignments (dual-nozzle)
+    if (tray_now_left >= 0 || tray_now_right >= 0) {
+        // If activeExtruder is unknown (-1), don't show any tray as active
+        // (matches frontend: if (activeExtruder === null || activeExtruder === -1) return null)
+        if (active_extruder < 0) {
+            return false;
+        }
+
+        // Only show active if this unit's extruder matches the active one
+        if (unit_extruder != active_extruder) {
+            return false;
+        }
+
+        // Get the loaded tray for this extruder
+        int loaded_tray = (unit_extruder == 0) ? tray_now_right : tray_now_left;
+
+        // Check if loaded tray is valid (not null/255/external)
+        if (loaded_tray < 0 || loaded_tray >= 254) {
+            return false;
+        }
+
+        // Check if this slot matches the loaded tray
+        return (global_tray == loaded_tray);
+    }
+
+    // Single-nozzle fallback: use legacy tray_now
+    return (tray_now >= 0 && tray_now < 255 && global_tray == tray_now);
+}
+
 static void update_ams_overview_display(void) {
     // Only update on AMS overview screen
     if (!objects.ams_overview || lv_scr_act() != objects.ams_overview) {
@@ -1363,7 +1412,10 @@ static void update_ams_overview_display(void) {
     }
 
     int ams_count = backend_get_ams_count(selected_printer_index);
-    int tray_now = backend_get_tray_now(selected_printer_index);
+    int tray_now = backend_get_tray_now(selected_printer_index);  // Legacy single-nozzle
+    int tray_now_left = backend_get_tray_now_left(selected_printer_index);
+    int tray_now_right = backend_get_tray_now_right(selected_printer_index);
+    int active_extruder = backend_get_active_extruder(selected_printer_index);
 
     // Build a set of which AMS IDs are present
     bool has_ams[256] = {false};
@@ -1475,10 +1527,12 @@ static void update_ams_overview_display(void) {
                             }
                         }
 
-                        // Highlight active slot
+                        // Highlight active slot (dual-nozzle aware)
                         int global_tray = get_global_tray_index(0, j);
                         if (slots[j]) {
-                            if (global_tray == tray_now) {
+                            bool slot_active = is_slot_active_dual_aware(global_tray, info->extruder,
+                                tray_now, tray_now_left, tray_now_right, active_extruder);
+                            if (slot_active) {
                                 lv_obj_set_style_border_color(slots[j], lv_color_hex(ACCENT_GREEN), 0);
                                 lv_obj_set_style_border_width(slots[j], 3, 0);
                             } else {
@@ -1587,9 +1641,12 @@ static void update_ams_overview_display(void) {
                             }
                         }
 
+                        // Highlight active slot (dual-nozzle aware)
                         int global_tray = get_global_tray_index(1, j);
                         if (slots[j]) {
-                            if (global_tray == tray_now) {
+                            bool slot_active = is_slot_active_dual_aware(global_tray, info->extruder,
+                                tray_now, tray_now_left, tray_now_right, active_extruder);
+                            if (slot_active) {
                                 lv_obj_set_style_border_color(slots[j], lv_color_hex(ACCENT_GREEN), 0);
                                 lv_obj_set_style_border_width(slots[j], 3, 0);
                             } else {
@@ -1698,9 +1755,12 @@ static void update_ams_overview_display(void) {
                             }
                         }
 
+                        // Highlight active slot (dual-nozzle aware)
                         int global_tray = get_global_tray_index(2, j);
                         if (slots[j]) {
-                            if (global_tray == tray_now) {
+                            bool slot_active = is_slot_active_dual_aware(global_tray, info->extruder,
+                                tray_now, tray_now_left, tray_now_right, active_extruder);
+                            if (slot_active) {
                                 lv_obj_set_style_border_color(slots[j], lv_color_hex(ACCENT_GREEN), 0);
                                 lv_obj_set_style_border_width(slots[j], 3, 0);
                             } else {
@@ -1792,9 +1852,12 @@ static void update_ams_overview_display(void) {
                             }
                         }
 
+                        // Highlight active slot (dual-nozzle aware)
                         int global_tray = get_global_tray_index(3, j);
                         if (slots[j]) {
-                            if (global_tray == tray_now) {
+                            bool slot_active = is_slot_active_dual_aware(global_tray, info->extruder,
+                                tray_now, tray_now_left, tray_now_right, active_extruder);
+                            if (slot_active) {
                                 lv_obj_set_style_border_color(slots[j], lv_color_hex(ACCENT_GREEN), 0);
                                 lv_obj_set_style_border_width(slots[j], 3, 0);
                             } else {
@@ -1882,9 +1945,12 @@ static void update_ams_overview_display(void) {
                         }
                     }
 
+                    // Highlight active slot (dual-nozzle aware)
                     int global_tray = get_global_tray_index(128, 0);
                     if (objects.ams_screen_ams_panel_ht_a_slot) {
-                        if (global_tray == tray_now) {
+                        bool slot_active = is_slot_active_dual_aware(global_tray, info->extruder,
+                            tray_now, tray_now_left, tray_now_right, active_extruder);
+                        if (slot_active) {
                             lv_obj_set_style_border_color(objects.ams_screen_ams_panel_ht_a_slot, lv_color_hex(ACCENT_GREEN), 0);
                             lv_obj_set_style_border_width(objects.ams_screen_ams_panel_ht_a_slot, 3, 0);
                         } else {
@@ -1971,9 +2037,12 @@ static void update_ams_overview_display(void) {
                         }
                     }
 
+                    // Highlight active slot (dual-nozzle aware)
                     int global_tray = get_global_tray_index(129, 0);
                     if (objects.ams_screen_ams_panel_ht_b_slot) {
-                        if (global_tray == tray_now) {
+                        bool slot_active = is_slot_active_dual_aware(global_tray, info->extruder,
+                            tray_now, tray_now_left, tray_now_right, active_extruder);
+                        if (slot_active) {
                             lv_obj_set_style_border_color(objects.ams_screen_ams_panel_ht_b_slot, lv_color_hex(ACCENT_GREEN), 0);
                             lv_obj_set_style_border_width(objects.ams_screen_ams_panel_ht_b_slot, 3, 0);
                         } else {

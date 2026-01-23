@@ -172,6 +172,10 @@ static void parse_ams_tray(cJSON *tray_json, BackendAmsTray *tray) {
 
     item = cJSON_GetObjectItem(tray_json, "nozzle_temp_max");
     tray->nozzle_temp_max = item ? item->valueint : 0;
+
+    // Debug: Log tray parsing
+    printf("[backend] Tray %d.%d: type='%s' color='%s' sub_brands='%s'\n",
+           tray->ams_id, tray->tray_id, tray->tray_type, tray->tray_color, tray->tray_sub_brands);
 }
 
 // Parse AMS unit from JSON
@@ -248,6 +252,10 @@ static void parse_printer_state(cJSON *state_json, BackendPrinterState *printer)
 
     item = cJSON_GetObjectItem(state_json, "tray_now_right");
     printer->tray_now_right = item && !cJSON_IsNull(item) ? item->valueint : -1;
+
+    // Debug: Log tray_now values
+    printf("[backend] Parsed tray_now=%d, left=%d, right=%d\n",
+           printer->tray_now, printer->tray_now_left, printer->tray_now_right);
 
     item = cJSON_GetObjectItem(state_json, "active_extruder");
     printer->active_extruder = item && !cJSON_IsNull(item) ? item->valueint : -1;

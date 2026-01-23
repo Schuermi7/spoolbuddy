@@ -903,6 +903,12 @@ class PrinterConnection:
                             self._state.tray_now_right = global_tray
                         elif ext_id == 1:
                             self._state.tray_now_left = global_tray
+                    else:
+                        # No tray loaded - clear the tray indicator for this extruder
+                        if ext_id == 0:
+                            self._state.tray_now_right = 255
+                        elif ext_id == 1:
+                            self._state.tray_now_left = 255
 
         if extruder_state is not None:
             # Active extruder is in bits 4-7: (state >> 4) & 0xF
