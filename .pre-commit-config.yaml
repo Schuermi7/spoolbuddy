@@ -1,0 +1,34 @@
+# Pre-commit hooks for SpoolStation
+# Install with: pip install pre-commit && pre-commit install
+
+repos:
+  # Ruff - Fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.11
+    hooks:
+      # Linter
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        types_or: [python, pyi]
+      # Formatter
+      - id: ruff-format
+        types_or: [python, pyi]
+
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(frontend/dist/|firmware/)
+      - id: end-of-file-fixer
+        exclude: ^(frontend/dist/|firmware/)
+      - id: check-yaml
+        exclude: ^firmware/
+      - id: check-json
+        exclude: ^(frontend/dist/|firmware/)
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+        exclude: ^(frontend/dist/|firmware/|screenshots/)
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: detect-private-key

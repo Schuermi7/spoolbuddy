@@ -1,0 +1,80 @@
+# SpoolBuddy firmware ESP-IDF configuration
+# Target: ESP32-S3 with PSRAM and RGB LCD
+
+# CPU frequency
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# PSRAM configuration (Octal PSRAM for ELECROW CrowPanel)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+
+# CRITICAL: 64-byte cache line for optimal PSRAM DMA performance
+# Required for RGB LCD bounce buffer mode to work properly
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# Allow malloc to use SPIRAM for large allocations
+CONFIG_SPIRAM_USE_MALLOC=y
+# Allocations larger than this go to PSRAM (lowered to 64 bytes to route
+# most LVGL allocations to PSRAM, freeing internal SRAM for WiFi)
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=64
+# Allow placing BSS segments in external memory (for EXT_RAM_BSS_ATTR)
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# LCD driver support
+CONFIG_LCD_RGB_ISR_IRAM_SAFE=y
+
+# Log level
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Console via UART0 (default)
+# Note: GPIO43/44 conflict with NFC SPI - keep NFC_ENABLED=false for logging
+
+# Stack size for main task (UI needs some stack)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Flash configuration
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+# Custom partition table for single-app OTA (8MB flash too small for dual OTA)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="/opt/claude/projects/SpoolStation/firmware/partitions.csv"
+
+# Watchdog timers - disabled to allow heavy UI rendering
+CONFIG_ESP_TASK_WDT_EN=n
+
+# WiFi memory optimization - push buffers to PSRAM where possible
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=2
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_RX_BA_WIN=2
+CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=8
+# Use dynamic TX buffer (less static RAM usage)
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER=y
+CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+
+# LWIP memory optimization - smaller buffers, use PSRAM
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=2048
+CONFIG_LWIP_TCP_WND_DEFAULT=2048
+
+# LVGL 9.x Configuration
+# Use our lv_conf.h instead of Kconfig-only mode
+CONFIG_LV_CONF_SKIP=n
+
+# Enable software draw engine with complex rendering (masks, rounded corners, etc.)
+# CRITICAL: Without this, dropdown/textarea/keyboard widgets crash!
+CONFIG_LV_USE_DRAW_SW=y
+CONFIG_LV_DRAW_SW_COMPLEX=y
+
+# Font settings - enable the fonts used by EEZ UI
+CONFIG_LV_FONT_MONTSERRAT_10=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_28=y

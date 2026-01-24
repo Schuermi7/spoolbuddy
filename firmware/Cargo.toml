@@ -1,0 +1,65 @@
+[package]
+name = "spoolbuddy-firmware"
+version = "0.1.1-beta.11"
+edition = "2021"
+license = "MIT"
+rust-version = "1.77"
+
+[[bin]]
+name = "spoolbuddy-firmware"
+harness = false
+
+[dependencies]
+# ESP-IDF HAL and system bindings (for RGB LCD with bounce buffer support)
+esp-idf-hal = "0.45"
+esp-idf-sys = { version = "0.36", features = ["binstart"] }
+esp-idf-svc = { version = "0.51", default-features = false, features = ["std", "binstart"] }
+
+# For WiFi configuration
+heapless = "0.8"
+
+# Logging
+log = "0.4"
+
+# Graphics - embedded-graphics for basic shapes (kept for potential future use)
+embedded-graphics = "0.8"
+embedded-graphics-core = "0.4.0"
+
+# Hardware IO
+embedded-hal = "1.0.0"
+embedded-svc = "0.28"
+
+# Error handling
+anyhow = "1.0"
+
+# C String interop
+cstr_core = "0.2.1"
+
+# JSON parsing for backend communication
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+
+[build-dependencies]
+embuild = "0.33"
+
+# ESP-IDF components: lvgl, eez_ui, and display_driver
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/lvgl", "components/eez_ui", "components/display_driver"]
+
+[features]
+default = []
+
+[profile.release]
+opt-level = "s"
+lto = false
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+# Master branches needed for ESP-IDF v5.2+ (esp_lcd_panel_rgb.h support)
+[patch.crates-io]
+esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys.git" }
+esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal.git" }
+esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc.git" }
+embedded-svc = { git = "https://github.com/esp-rs/embedded-svc.git" }

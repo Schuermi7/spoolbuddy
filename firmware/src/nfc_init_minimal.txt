@@ -1,0 +1,86 @@
+    // ==========================================================================
+    // Initialize PN5180 NFC Module (Minimal - no diagnostics)
+    // Pins: SCK=GPIO43, MISO=GPIO44, MOSI=GPIO16, NSS=GPIO8
+    // ==========================================================================
+    if NFC_ENABLED {
+        info!("Initializing NFC...");
+
+        // Take GPIO pins directly (no tests)
+        let gpio43 = peripherals.pins.gpio43;  // SCK
+        let gpio44 = peripherals.pins.gpio44;  // MISO
+        let gpio16 = peripherals.pins.gpio16;  // MOSI
+
+        // Initialize SPI3 bus
+        match SpiDriver::new(
+            peripherals.spi3,
+            gpio43,  // SCK
+            gpio16,  // MOSI
+            Some(gpio44),  // MISO
+            &SpiDriverConfig::default(),
+        ) {
+            Ok(spi_bus) => {
+                info!("SPI3 initialized");
+
+                // Leak SPI driver for static lifetime
+                let spi_static: &'static mut SpiDriver<'static> = Box::leak(Box::new(spi_bus));
+
+                // Create SPI device (Mode 0, 1 MHz)
+                use esp_idf_hal::spi::config::{Mode, Phase, Polarity};
+                let spi_config = SpiConfig::default()
+                    .baudrate(Hertz(1_000_000))
+                    .data_mode(Mode {
+                        polarity: Polarity::IdleLow,
+                        phase: Phase::CaptureOnFirstTransition,
+                    });
+
+                match SpiDeviceDriver::new(spi_static, Option::<esp_idf_hal::gpio::AnyOutputPin>::None, &spi_config) {
+                    Ok(spi_device) => {
+                        // Initialize NSS pin
+                        match PinDriver::output(peripherals.pins.gpio8) {
+                            Ok(mut nss) => {
+                                let _ = nss.set_high();  // NSS inactive
+                                FreeRtos::delay_ms(100);  // PN5180 power-on
+
+                                // Create driver
+                                let driver = nfc::pn5180::Pn5180Driver {
+                                    spi: spi_device,
+                                    nss,
+                                    busy: None,
+                                    rst: None,
+                                };
+
+                                // Store driver for polling
+                                let driver_ptr = Box::into_raw(Box::new(driver)) as *mut ();
+
+                                fn poll_nfc_driver(ptr: *mut ()) -> Option<String> {
+                                    type DriverType<'a> = nfc::pn5180::Pn5180Driver<'a,
+                                        esp_idf_hal::spi::SpiDeviceDriver<'a, &'a mut esp_idf_hal::spi::SpiDriver<'a>>>;
+                                    let driver = unsafe { &mut *(ptr as *mut DriverType<'static>) };
+                                    match driver.iso14443a_activate() {
+                                        Ok(Some(card)) => {
+                                            let uid_str: String = card.uid[..card.uid_len as usize]
+                                                .iter()
+                                                .map(|b| format!("{:02X}", b))
+                                                .collect::<Vec<_>>()
+                                                .join(":");
+                                            Some(uid_str)
+                                        }
+                                        _ => None
+                                    }
+                                }
+
+                                unsafe {
+                                    NFC_DRIVER_PTR = Some(driver_ptr);
+                                    NFC_POLL_FN = Some(poll_nfc_driver);
+                                }
+                                info!("NFC ready");
+                            }
+                            Err(e) => warn!("NSS pin failed: {:?}", e),
+                        }
+                    }
+                    Err(e) => warn!("SPI device failed: {:?}", e),
+                }
+            }
+            Err(e) => warn!("SPI3 init failed: {:?}", e),
+        }
+    } // end if NFC_ENABLED

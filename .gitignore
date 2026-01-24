@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+*.egg-info/
+.eggs/
+
+# Node
+node_modules/
+frontend/dist/
+.npm
+*.log
+
+# Database
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+._.DS_Store
+._*
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+*.pyc
+.vite/
+
+# Testing/Coverage
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+coverage/
+.coverage
+coverage.xml
+
+# Screenshots (reference only, don't commit large assets)
+screenshots/
+
+# Rust / Firmware
+firmware/target/
+lvgl-simulator/target/
+Cargo.lock
+
+# Misc artifacts
+=*
+
+# EEZ Studio UI state (transient)
+*.eez-project-ui-state
+
+# Claude code
+CLAUDE.md
+SPOOLBUDDY_PLAN.md
+lvgl-simulator-sdl/build/

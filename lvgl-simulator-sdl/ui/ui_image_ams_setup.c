@@ -1,0 +1,1 @@
+../../eez/src/ui/ui_image_ams_setup.c

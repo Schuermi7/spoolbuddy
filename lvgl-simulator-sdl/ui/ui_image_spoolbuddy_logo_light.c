@@ -1,0 +1,1 @@
+../../eez/src/ui/ui_image_spoolbuddy_logo_light.c

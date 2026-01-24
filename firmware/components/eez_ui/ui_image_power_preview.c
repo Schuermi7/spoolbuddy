@@ -1,0 +1,1 @@
+../../../eez/src/ui/ui_image_power_preview.c

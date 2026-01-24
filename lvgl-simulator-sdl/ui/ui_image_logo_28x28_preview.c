@@ -1,0 +1,1 @@
+../../eez/src/ui/ui_image_logo_28x28_preview.c
