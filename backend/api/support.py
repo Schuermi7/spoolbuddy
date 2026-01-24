@@ -391,7 +391,7 @@ async def set_debug_logging(request: DebugLoggingToggle):
 @router.get("/logs", response_model=LogsResponse)
 async def get_logs(
     limit: int = Query(default=200, ge=1, le=1000),
-    level: str | None = Query(default=None, regex="^(DEBUG|INFO|WARNING|ERROR)$"),
+    level: str | None = Query(default=None, pattern="^(DEBUG|INFO|WARNING|ERROR)$"),
     search: str | None = Query(default=None, min_length=1),
 ):
     """Get application logs."""

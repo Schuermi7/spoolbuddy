@@ -449,7 +449,6 @@ export function ConfigureAmsSlotModal({
       // IMPORTANT: If a K-profile is selected, use its filament_id as tray_info_idx
       // The printer requires tray_info_idx to match the K-profile's filament_id for calibration to apply
       if (selectedCal?.filament_id) {
-        console.log(`Using K-profile filament_id for tray_info_idx: ${selectedCal.filament_id}`)
         trayInfoIdx = selectedCal.filament_id
       }
 

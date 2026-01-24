@@ -97,6 +97,12 @@ async def async_client(test_db, mock_printer_manager) -> AsyncGenerator[AsyncCli
         patch("api.spools.get_db", override_get_db),
         patch("api.printers.get_db", override_get_db),
         patch("api.cloud.get_db", override_get_db),
+        patch("api.colors.get_db", override_get_db),
+        patch("api.api_keys.get_db", override_get_db),
+        patch("api.catalog.get_db", override_get_db),
+        patch("api.settings.get_db", override_get_db),
+        patch("api.support.get_db", override_get_db),
+        patch("api.tags.get_db", override_get_db),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             yield client

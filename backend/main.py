@@ -74,7 +74,7 @@ def _load_bambu_color_map():
     global _bambu_color_map
     csv_path = Path(__file__).parent.parent / "spoolease_sources" / "core" / "data" / "bambu-color-names.csv"
     if not csv_path.exists():
-        logger.warning(f"Bambu color names CSV not found at {csv_path}")
+        logger.debug(f"Bambu color names CSV not found at {csv_path}")
         return
     try:
         with open(csv_path) as f:

@@ -1,5 +1,5 @@
 [project]
-name = "spoolstation"
+name = "spoolbuddy"
 version = "0.1.1"
 description = "Filament management system for Bambu Lab 3D printers"
 requires-python = ">=3.11"

@@ -220,6 +220,15 @@ class TestCloudLogoutAPI:
 class TestCloudSettingsAPI:
     """Tests for slicer settings retrieval endpoints."""
 
+    @pytest.fixture(autouse=True)
+    def clear_settings_cache(self):
+        """Clear the settings cache before each test."""
+        from api.cloud import _clear_settings_cache
+
+        _clear_settings_cache()
+        yield
+        _clear_settings_cache()
+
     async def test_get_settings_authenticated(self, async_client, test_db, sample_slicer_settings):
         """Test getting slicer settings when authenticated."""
         await test_db.set_setting("cloud_access_token", "valid-token")
@@ -318,6 +327,15 @@ class TestCloudSettingDetailAPI:
 
 class TestCloudFilamentsAPI:
     """Tests for filament presets convenience endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def clear_settings_cache(self):
+        """Clear the settings cache before each test."""
+        from api.cloud import _clear_settings_cache
+
+        _clear_settings_cache()
+        yield
+        _clear_settings_cache()
 
     async def test_get_filament_presets(self, async_client, test_db, sample_slicer_settings):
         """Test getting filament presets."""

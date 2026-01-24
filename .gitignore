@@ -43,6 +43,14 @@ Thumbs.db
 *.pyc
 .vite/
 
+# Testing/Coverage
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+coverage/
+.coverage
+coverage.xml
+
 # Screenshots (reference only, don't commit large assets)
 screenshots/
 

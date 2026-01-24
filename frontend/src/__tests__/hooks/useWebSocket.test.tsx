@@ -197,7 +197,8 @@ describe('useWebSocket', () => {
       expect(capturedState?.deviceConnected).toBe(true)
       expect(capturedState?.currentWeight).toBe(850.5)
       expect(capturedState?.weightStable).toBe(true)
-      expect(capturedState?.currentTagId).toBe('ABC123==')
+      // currentTagId is intentionally not set from initial_state to avoid stale data
+      expect(capturedState?.currentTagId).toBeNull()
       expect(capturedState?.printerStatuses.get('00M09A123456789')).toBe(true)
       expect(capturedState?.printerStatuses.get('00M09A987654321')).toBe(false)
     })

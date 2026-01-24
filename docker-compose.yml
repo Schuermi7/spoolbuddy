@@ -1,8 +1,10 @@
+name: spoolbuddy
+
 services:
   spoolbuddy:
     build: .
-    ports:
-      - "3000:3000"
+    # Host network required for SSDP printer discovery (UDP broadcast)
+    network_mode: host
     volumes:
       - spoolbuddy-data:/app/data
       # Mount /dev for dynamic serial device access
