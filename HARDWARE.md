@@ -6,6 +6,7 @@ Make sure you choose the Advanced (AI) version for this project!
 Pico W will work just as fine but is overkill for this project.
 3) [SparkFun Qwiic NAU7802](https://www.ebay.de/itm/116887968109?mkevt=1&mkpid=0&emsid=e11401.m144671.l197929&mkcid=7&ch=osgood&euid=cc50a2cd126143d2ad6d47a92fb773a5&bu=43216651729&exe=0&ext=0&osub=-1~1&crd=20251217014716&segname=11401)
 4) [Load Cell 5kg](https://www.ebay.de/itm/175773183411?_skw=Wägezelle+5kg&itmmeta=01KFN9AWTC0V1B531FG0J1H5FJ&hash=item28ece5edb3:g:GAYAAOSwlPlkiwYt&itmprp=enc%3AAQALAAAA0O7PUuNWmJ%2B%2BUShgI9tQz%2FonlQBK20VOkj0AwmmsCTefWnYbjbPIzz1eqVFkFsUEg5r1BaZONNwU0CR1P3lxa6nl4SbueB3WzuR87ECaS2yDWe9%2FDaiUWhywyuPuH5caCVhHCkBaciPYOpNHm8Gn4TgzacyyLoWkJRfsWGiepfpElr5MX9Zfu1Uzjy4DiSt51HcWTqIg%2FEnqt7fqQkHCExRx6rGM75lKknamRm6SPwPMfPeQ5khBNO4OPr5ZRLhnTxXIS%2BZ9tBuxlf8R28S0H7Y%3D%7Ctkp%3ABk9SR-DNq6n9Zg)
+Get the bar-type typically sold with M4 screw holes
 5) [RFID Reader PN5180](https://www.laskakit.cz/en/rfid-ctecka-s-vestavenou-antenou-nfc-rf-pn5180-iso15693-cteni-i-zapis/)
 Make sure to get the one with Antenna.
 6) [Silicone Stranded Wires 22AWG](https://www.amazon.de/dp/B0BTBBV5FK?ref=ppx_yo2ov_dt_b_fed_asin_title)
