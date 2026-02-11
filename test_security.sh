@@ -11,10 +11,11 @@
 #
 # Available scans:
 #   bandit          Python static security analysis (SAST)
-#   codeql          CodeQL analysis (Actions + JavaScript + Python)
+#   codeql          CodeQL analysis (Actions + JavaScript + Python + Rust)
 #   codeql-actions  CodeQL GitHub Actions only
 #   codeql-python   CodeQL Python only
 #   codeql-js       CodeQL JavaScript/TypeScript only
+#   codeql-rust     CodeQL Rust only
 #   trivy           Trivy container image + Dockerfile/IaC scan
 #   trivy-image     Trivy container image scan only
 #   trivy-config    Trivy Dockerfile/IaC scan only
@@ -118,7 +119,7 @@ scan_bandit() {
         echo "SKIP: 'bandit' not found. Install: pip install bandit[sarif]"
         return 2
     fi
-    bandit -r backend/ --severity-level medium -x backend/tests 2>&1
+    bandit -r backend/ --severity-level medium -x backend/tests,backend/venv 2>&1
 }
 
 scan_codeql_python() {
@@ -127,8 +128,11 @@ scan_codeql_python() {
         echo "SKIP: CodeQL CLI not installed. Install: gh extension install github/gh-codeql"
         return 2
     fi
+    gh codeql pack download codeql/python-queries &>/dev/null
     echo "Creating database..."
-    gh codeql database create --overwrite --language=python --threads=0 /tmp/spoolbuddy-codeql-python &>/dev/null
+    gh codeql database create --overwrite --language=python --threads=0 \
+        --source-root="$PROJECT_ROOT/backend" \
+        /tmp/spoolbuddy-codeql-python &>/dev/null
     echo "Analyzing..."
     gh codeql database analyze /tmp/spoolbuddy-codeql-python \
         codeql/python-queries \
@@ -143,11 +147,31 @@ scan_codeql_js() {
         echo "SKIP: CodeQL CLI not installed."
         return 2
     fi
+    gh codeql pack download codeql/javascript-queries &>/dev/null
     echo "Creating database..."
     gh codeql database create --overwrite --language=javascript --source-root=frontend --threads=0 /tmp/spoolbuddy-codeql-javascript &>/dev/null
     echo "Analyzing..."
     gh codeql database analyze /tmp/spoolbuddy-codeql-javascript \
         codeql/javascript-queries \
+        --threads=0 --format=sarifv2.1.0 --output="$sarif" &>/dev/null
+    echo ""
+    parse_sarif "$sarif"
+}
+
+scan_codeql_rust() {
+    local sarif="$PROJECT_ROOT/codeql-rust-results.sarif"
+    if ! has_codeql; then
+        echo "SKIP: CodeQL CLI not installed. Install: gh extension install github/gh-codeql"
+        return 2
+    fi
+    gh codeql pack download codeql/rust-queries &>/dev/null
+    echo "Creating database..."
+    gh codeql database create --overwrite --language=rust --threads=0 \
+        --source-root="$PROJECT_ROOT/firmware" \
+        /tmp/spoolbuddy-codeql-rust &>/dev/null
+    echo "Analyzing..."
+    gh codeql database analyze /tmp/spoolbuddy-codeql-rust \
+        codeql/rust-queries \
         --threads=0 --format=sarifv2.1.0 --output="$sarif" &>/dev/null
     echo ""
     parse_sarif "$sarif"
@@ -159,6 +183,7 @@ scan_codeql_actions() {
         echo "SKIP: CodeQL CLI not installed."
         return 2
     fi
+    gh codeql pack download codeql/actions-queries &>/dev/null
     echo "Creating database..."
     gh codeql database create --overwrite --language=actions --threads=0 /tmp/spoolbuddy-codeql-actions &>/dev/null
     echo "Analyzing..."
@@ -189,7 +214,7 @@ scan_trivy_config() {
         echo "SKIP: 'trivy' not found. Install: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh"
         return 2
     fi
-    trivy config --severity CRITICAL,HIGH,MEDIUM . 2>&1
+    trivy config --severity CRITICAL,HIGH,MEDIUM --skip-dirs firmware/.embuild . 2>&1
 }
 
 scan_pip_audit() {
@@ -363,13 +388,13 @@ SCANS_TO_RUN=()
 if [ $# -eq 0 ]; then
     SCANS_TO_RUN=(bandit pip-audit npm-audit)
 elif [ "$1" = "--full" ]; then
-    SCANS_TO_RUN=(bandit pip-audit npm-audit codeql-actions codeql-python codeql-js trivy-image trivy-config)
+    SCANS_TO_RUN=(bandit pip-audit npm-audit codeql-actions codeql-python codeql-js codeql-rust trivy-image trivy-config)
 else
     for scan in "$@"; do
         case "$scan" in
-            codeql) SCANS_TO_RUN+=(codeql-actions codeql-python codeql-js) ;;
+            codeql) SCANS_TO_RUN+=(codeql-actions codeql-python codeql-js codeql-rust) ;;
             trivy)  SCANS_TO_RUN+=(trivy-image trivy-config) ;;
-            bandit|codeql-actions|codeql-python|codeql-js|trivy-image|trivy-config|pip-audit|npm-audit)
+            bandit|codeql-actions|codeql-python|codeql-js|codeql-rust|trivy-image|trivy-config|pip-audit|npm-audit)
                 SCANS_TO_RUN+=("$scan") ;;
             *)
                 echo -e "${RED}Unknown scan: $scan${NC}"
@@ -387,6 +412,7 @@ for scan in "${SCANS_TO_RUN[@]}"; do
         codeql-actions) launch_scan "codeql-actions" scan_codeql_actions ;;
         codeql-python)  launch_scan "codeql-python"  scan_codeql_python ;;
         codeql-js)      launch_scan "codeql-js"      scan_codeql_js ;;
+        codeql-rust)    launch_scan "codeql-rust"    scan_codeql_rust ;;
         trivy-image)    launch_scan "trivy-image"    scan_trivy_image ;;
         trivy-config)   launch_scan "trivy-config"   scan_trivy_config ;;
         pip-audit)      launch_scan "pip-audit"      scan_pip_audit ;;

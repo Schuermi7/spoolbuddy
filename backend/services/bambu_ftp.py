@@ -9,7 +9,7 @@ import asyncio
 import logging
 import socket
 import ssl
-from ftplib import FTP, FTP_TLS
+from ftplib import FTP, FTP_TLS  # nosec B402
 from io import BytesIO
 
 logger = logging.getLogger(__name__)

@@ -11,7 +11,7 @@ services:
     environment:
       TESTING: "1"
       SPOOLBUDDY_DATABASE_PATH: ":memory:"
-    command: ["pytest", "tests/", "-v", "--tb=short", "-p", "no:cacheprovider"]
+    command: ["pytest", "tests/", "-v", "--tb=short", "-p", "no:cacheprovider", "-n", "auto"]
 
   frontend-test:
     build:
