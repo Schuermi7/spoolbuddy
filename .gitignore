@@ -51,6 +51,9 @@ coverage/
 .coverage
 coverage.xml
 
+# Security scan artifacts
+*.sarif
+
 # Screenshots (reference only, don't commit large assets)
 screenshots/
 
