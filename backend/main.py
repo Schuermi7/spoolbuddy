@@ -340,7 +340,7 @@ async def udp_log_listener():
     # Create UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("0.0.0.0", UDP_LOG_PORT))
+    sock.bind(("0.0.0.0", UDP_LOG_PORT))  # nosec B104
     sock.setblocking(False)
 
     logger.info(f"UDP log listener started on port {UDP_LOG_PORT}")

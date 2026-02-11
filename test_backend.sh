@@ -1,5 +1,11 @@
-#!/bin/bash
+#!/bin/sh
 
 cd backend
-python -m pytest tests/ -v           # All tests
+ruff check && ruff format --check
+
+if [ "$1" = "--full" ]; then
+  python -m pytest tests/ -v -n auto
+else
+  python -m pytest tests/ -v -n auto
+fi
 cd ..

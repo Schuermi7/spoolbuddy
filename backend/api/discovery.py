@@ -163,7 +163,7 @@ def _create_discovery_socket(port: int) -> socket.socket | None:
         # Also join the SSDP multicast group (239.255.255.250) for completeness
         try:
             mcast_group = socket.inet_aton("239.255.255.250")
-            mreq = mcast_group + socket.inet_aton("0.0.0.0")
+            mreq = mcast_group + socket.inet_aton("0.0.0.0")  # nosec B104
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         except Exception as e:
             logger.debug(f"Could not join multicast group: {e}")

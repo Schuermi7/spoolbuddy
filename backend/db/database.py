@@ -563,7 +563,7 @@ class Database:
             values.append(int(time.time()))
             values.append(spool_id)
 
-            query = f"UPDATE spools SET {', '.join(updates)} WHERE id = ?"
+            query = f"UPDATE spools SET {', '.join(updates)} WHERE id = ?"  # nosec B608
             await self.conn.execute(query, values)
             await self.conn.commit()
 
@@ -651,7 +651,7 @@ class Database:
             values.append(data_origin)
 
         values.append(spool_id)
-        query = f"UPDATE spools SET {', '.join(updates)} WHERE id = ?"
+        query = f"UPDATE spools SET {', '.join(updates)} WHERE id = ?"  # nosec B608
 
         await self.conn.execute(query, values)
         await self.conn.commit()
@@ -717,7 +717,7 @@ class Database:
 
         if updates:
             values.append(serial)
-            query = f"UPDATE printers SET {', '.join(updates)} WHERE serial = ?"
+            query = f"UPDATE printers SET {', '.join(updates)} WHERE serial = ?"  # nosec B608
             await self.conn.execute(query, values)
             await self.conn.commit()
 
@@ -859,7 +859,7 @@ class Database:
             values.append(calculated_weight)
 
         values.append(spool_id)
-        query = f"UPDATE spools SET {', '.join(updates)} WHERE id = ?"
+        query = f"UPDATE spools SET {', '.join(updates)} WHERE id = ?"  # nosec B608
         await self.conn.execute(query, values)
         await self.conn.commit()
 

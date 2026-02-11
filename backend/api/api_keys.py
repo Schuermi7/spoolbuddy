@@ -210,7 +210,7 @@ async def update_api_key(key_id: int, data: APIKeyUpdate):
             raise HTTPException(status_code=404, detail="API key not found")
 
     await db.conn.execute(
-        f"UPDATE api_keys SET {', '.join(updates)} WHERE id = ?",
+        f"UPDATE api_keys SET {', '.join(updates)} WHERE id = ?",  # nosec B608
         params,
     )
     await db.conn.commit()

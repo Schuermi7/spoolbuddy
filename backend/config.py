@@ -3,7 +3,7 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 
 # Application version - update this for each release
-APP_VERSION = "0.1.1b2"
+APP_VERSION = "0.1.3b1"
 
 # GitHub repository for update checks
 GITHUB_REPO = "maziggy/SpoolBuddy"
@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     """Application settings with environment variable support."""
 
     # Server
-    host: str = "0.0.0.0"
+    host: str = "0.0.0.0"  # nosec B104
     port: int = 3000
 
     # Database
