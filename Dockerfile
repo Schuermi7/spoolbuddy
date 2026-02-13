@@ -23,7 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
+RUN pip install --no-cache-dir --root-user-action=ignore --upgrade pip && \
+    pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
 
 # Copy backend
 COPY backend/ ./
@@ -31,8 +32,9 @@ COPY backend/ ./
 # Copy built frontend from builder stage
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
-# Create data directory for persistent storage
-RUN mkdir -p /app/data
+# Create non-root user and data directory
+RUN addgroup --system spoolbuddy && adduser --system --ingroup spoolbuddy spoolbuddy && \
+    mkdir -p /app/data && chown spoolbuddy:spoolbuddy /app/data
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
@@ -44,6 +46,9 @@ EXPOSE 3000
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:3000/api/spools')" || exit 1
+
+# Switch to non-root user
+USER spoolbuddy
 
 # Run the application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3000"]

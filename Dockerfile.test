@@ -11,18 +11,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies including test dependencies
 COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --root-user-action=ignore --upgrade pip && \
+    pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
 
 # Copy backend code
 COPY backend/ ./
 
-# Create necessary directories
-RUN mkdir -p /app/data
+# Create non-root user and necessary directories
+RUN addgroup --system testuser && adduser --system --ingroup testuser testuser && \
+    mkdir -p /app/data && chown -R testuser:testuser /app
 
 # Environment variables for testing
 ENV PYTHONUNBUFFERED=1
 ENV SPOOLBUDDY_DATABASE_PATH=:memory:
 ENV TESTING=1
+
+# Switch to non-root user
+USER testuser
 
 # Default command runs pytest
 CMD ["pytest", "tests/", "-v", "--tb=short", "-p", "no:cacheprovider", "-n", "auto"]
@@ -39,6 +44,12 @@ RUN npm ci
 
 # Copy frontend source
 COPY frontend/ ./
+
+# Ensure node user has write access
+RUN chown -R node:node /app
+
+# Switch to non-root user
+USER node
 
 # Default command runs tests
 CMD ["npm", "test", "--", "--run"]
