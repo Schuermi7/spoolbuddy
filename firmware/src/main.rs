@@ -40,6 +40,9 @@ mod time_manager;
 // OTA update manager
 mod ota_manager;
 
+// Display settings persistence (brightness/timeout)
+mod display_settings_manager;
+
 // Direct SPI NFC disabled - now using I2C bridge via Pico
 const NFC_ENABLED: bool = false;
 
@@ -66,6 +69,8 @@ pub extern "C" fn display_set_brightness(brightness: u8) {
         display_set_backlight_hw(brightness);
     }
     info!("Display brightness set to {}%", brightness);
+    let timeout = unsafe { DISPLAY_TIMEOUT };
+    display_settings_manager::save_settings(brightness, timeout);
 }
 
 #[no_mangle]
@@ -79,6 +84,8 @@ pub extern "C" fn display_set_timeout(timeout_seconds: u16) {
         DISPLAY_TIMEOUT = timeout_seconds;
     }
     info!("Display timeout set to {} seconds", timeout_seconds);
+    let brightness = unsafe { DISPLAY_BRIGHTNESS };
+    display_settings_manager::save_settings(brightness, timeout_seconds);
 }
 
 #[no_mangle]
@@ -166,8 +173,9 @@ fn main() {
     let sysloop = EspSystemEventLoop::take().expect("Failed to take system event loop");
     let nvs = EspDefaultNvsPartition::take().ok();
 
-    // Clone NVS partition for scale calibration persistence
+    // Clone NVS partitions for persistence
     let nvs_for_scale = nvs.clone();
+    let nvs_for_display = nvs.clone();
 
     match wifi_manager::init_wifi_system(peripherals.modem, sysloop, nvs) {
         Ok(_) => info!("WiFi subsystem ready"),
@@ -176,6 +184,9 @@ fn main() {
 
     // Initialize scale NVS (for calibration persistence)
     scale_manager::init_nvs(nvs_for_scale);
+
+    // Initialize display settings NVS (for brightness/timeout persistence)
+    display_settings_manager::init_nvs(nvs_for_display);
 
     // Initialize backend client (for server communication)
     backend_client::init();
@@ -188,6 +199,17 @@ fn main() {
         if result != 0 {
             info!("Display init failed with code: {}", result);
         }
+    }
+
+    // Load and apply saved display settings
+    {
+        let (brightness, timeout) = display_settings_manager::load_settings();
+        unsafe {
+            DISPLAY_BRIGHTNESS = brightness;
+            DISPLAY_TIMEOUT = timeout;
+            display_set_backlight_hw(brightness);
+        }
+        info!("Display settings applied: brightness={}%, timeout={}s", brightness, timeout);
     }
 
     // Initialize shared I2C bus on UART1-OUT port
