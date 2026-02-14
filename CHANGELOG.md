@@ -4,6 +4,9 @@ All notable changes to SpoolStation will be documented in this file.
 
 ## [0.1.3b1] - unreleased
 
+### Fixed
+- Display brightness and timeout now persist across reboots via NVS flash (#21)
+
 
 ## [0.1.1b2] - unreleased
 

@@ -72,3 +72,5 @@ Cargo.lock
 CLAUDE.md
 SPOOLBUDDY_PLAN.md
 lvgl-simulator-sdl/build/
+
+*.sarif
