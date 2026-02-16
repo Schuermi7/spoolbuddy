@@ -3,7 +3,6 @@
 //! Using LVGL 9.x with EEZ Studio generated UI
 
 use esp_idf_hal::delay::FreeRtos;
-// use esp_idf_hal::gpio::PinDriver;
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::units::Hertz;
