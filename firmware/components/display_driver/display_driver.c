@@ -385,39 +385,6 @@ int display_init(void)
             }
         }
 
-        // Check for Pico NFC Bridge at 0x55
-        ESP_LOGI(TAG, "Checking Pico NFC Bridge at 0x55...");
-        uint8_t nfc_cmd = 0x01;  // CMD_GET_PRODUCT_VERSION
-        uint8_t nfc_resp[16] = {0};
-        esp_err_t nfc_err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x55, &nfc_cmd, 1, 100);
-        if (nfc_err == ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(50));  // Give Pico time to process
-            nfc_err = i2c_master_read_from_device(TOUCH_I2C_PORT, 0x55, nfc_resp, 3, 100);
-            if (nfc_err == ESP_OK && nfc_resp[0] == 0) {
-                ESP_LOGI(TAG, "  Pico NFC Bridge FOUND! PN5180 version: %d.%d", nfc_resp[1], nfc_resp[2]);
-
-                // Test tag scan
-                ESP_LOGI(TAG, "  Testing tag scan...");
-                nfc_cmd = 0x10;  // CMD_SCAN_TAG
-                nfc_err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x55, &nfc_cmd, 1, 100);
-                if (nfc_err == ESP_OK) {
-                    vTaskDelay(pdMS_TO_TICKS(200));  // Tag scan takes longer
-                    nfc_err = i2c_master_read_from_device(TOUCH_I2C_PORT, 0x55, nfc_resp, 9, 100);
-                    if (nfc_err == ESP_OK && nfc_resp[0] == 0) {
-                        ESP_LOGI(TAG, "  TAG FOUND! UID: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
-                            nfc_resp[1], nfc_resp[2], nfc_resp[3], nfc_resp[4],
-                            nfc_resp[5], nfc_resp[6], nfc_resp[7], nfc_resp[8]);
-                    } else {
-                        ESP_LOGI(TAG, "  No tag present (status=%d)", nfc_resp[0]);
-                    }
-                }
-            } else {
-                ESP_LOGW(TAG, "  Pico NFC Bridge read failed (err=%d, status=%d)", nfc_err, nfc_resp[0]);
-            }
-        } else {
-            ESP_LOGW(TAG, "  Pico NFC Bridge NOT found at 0x55 (err=%d)", nfc_err);
-        }
-
         // Set backlight via 0x30 (STC8H1K28)
         i2c_err = i2c_master_write_to_device(TOUCH_I2C_PORT, 0x30, &brightness, 1, 100);
         ESP_LOGI(TAG, "Backlight set (0x30): %s", i2c_err == ESP_OK ? "OK" : "FAIL");
