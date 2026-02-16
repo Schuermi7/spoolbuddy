@@ -17,20 +17,22 @@
 ### Back Panel Layout
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     CrowPanel Advance 7.0" (Back)                       │
-│                                                                         │
-│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐  ┌─────────┐   │
-│   │UART0-OUT │  │UART1-OUT │  │ I2C-OUT  │  │   J9    │  │   J11   │   │
-│   │  4-pin   │  │  4-pin   │  │  4-pin   │  │  1x7    │  │  1x7    │   │
-│   │          │  │  Scale   │  │          │  │  N/A!   │  │ Control │   │
-│   │          │  │  I2C     │  │          │  │CONFLICT │  │  Pins   │   │
-│   └──────────┘  └──────────┘  └──────────┘  └─────────┘  └─────────┘   │
-│                                                                         │
-│   [BOOT]  [RESET]                                           [USB-C]    │
-│                        [DIP SWITCHES]                       [UART0-IN] │
-│                           S1  S0                                       │
-└─────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────┐
+│           CrowPanel Advance 7.0" (Back)        │
+│                                                │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐     │
+│   │UART0-OUT │  │UART1-OUT │  │ I2C-OUT  │     │
+│   │  4-pin   │  │  4-pin   │  │  4-pin   │     │
+│   │          │  │  Scale   │  │          │     │
+│   │          │  │  I2C     │  │          │     │
+│   └──────────┘  └──────────┘  └──────────┘     │
+│                                                │
+│                                        [USB-C] │
+│  [BOOT]                                        │
+│  [RESET]                                       │
+│                [DIP SWITCHES]       [UART0-IN] │
+│                     S1  S0                     │
+└────────────────────────────────────────────────┘
 ```
 
 ### UART1-OUT Header (4-pin) - For NAU7802 Scale I2C
@@ -70,7 +72,7 @@
     │                  │            │   │                   │                 │
     │   ┌──────────┐   │            │   └───────────────────┘                 │
     │   │ Antenna  │   │            │                                         │
-    │   │  Coil    │   │            │   J11 Header                            │
+    │   │  Coil    │   │            │   UART1-OUT Header                      │
     │   └──────────┘   │            │   ┌───────────────────┐                 │
     │                  │            │   │                   │                 │
     └──────────────────┘            │   │  IO19 ●──────────┼─────SDA          │
@@ -88,7 +90,7 @@
     │  │ Scale      │  │
     │  └────────────┘  │
     │        │         │
-    │   ┌────┴────┐    │
+    │  ┌─────┴──────┐  │
     │  │ Scale      │  │            
     │  └────────────┘  │
     │        │         │ 
@@ -194,7 +196,8 @@
 2. [ ] Connect SCL → UART1-OUT Pin 2 (IO20)
 3. [ ] Connect VCC → UART1-OUT Pin 3 (3V3)
 4. [ ] Connect GND → UART1-OUT Pin 4 (GND)
-5. [ ] Load cell wired to E+/E-/A+/A-
+5. [ ] Bridge VCC to AVDD for Scale Module voltage reference
+6. [ ] Load cell wired to E+/E-/A+/A-
 
 ---
 
@@ -211,7 +214,7 @@
 │  GND  → UART0 Pin4 (GND)     GND → UART1 Pin4 (GND)        │
 │  SCK  → Pico GP19 (Pin 25)   SDA → UART1 Pin1 (IO19)       │
 │  MISO → Pico GP16 (Pin 21)   SCL → UART1 Pin2 (IO20)       │
-│  MOSI → Pico GP18 (Pin 24)                                 │
+│  MOSI → Pico GP18 (Pin 24)   Bridge VCC to AVDD            │
 │  NSS  → Pico GP17 (Pin 22)   Load Cell → Squeeze terminal  │
 │  BUSY → Pico GP20 (Pin 26)   Red   → E+                    │
 │  RST  → Pico GP21 (Pin 27)   Black → E-                    │
