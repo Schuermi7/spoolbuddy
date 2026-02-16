@@ -38,6 +38,9 @@ mod time_manager;
 // OTA update manager
 mod ota_manager;
 
+// Display settings persistence (brightness/timeout)
+mod display_settings_manager;
+
 // Display driver C functions (handles LVGL init and EEZ UI)
 extern "C" {
     fn display_init() -> i32;
