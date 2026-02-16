@@ -10,3 +10,4 @@ target/
 
 # Generated files
 simulator/screenshots/test.png
+target/.rustc_info.json

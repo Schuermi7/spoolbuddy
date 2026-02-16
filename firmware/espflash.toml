@@ -1,11 +1,8 @@
-[connection]
-serial = "/dev/ttyUSB0"
-baud = 921600
+format = "EspIdf"
+
+[idf_format_args]
 
 [flash]
 mode = "dio"
 size = "8MB"
 frequency = "80MHz"
-
-[monitor]
-baud = 2000000000
